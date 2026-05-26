@@ -11,6 +11,8 @@ const valorantEntitlementsToken = process.env.VALORANT_ENTITLEMENTS_TOKEN || "";
 const valorantClientPlatform = process.env.VALORANT_CLIENT_PLATFORM || "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9";
 const valorantClientVersion = process.env.VALORANT_CLIENT_VERSION || "";
 const valorantPUUID = process.env.VALORANT_PUUID || "";
+const valorantGameName = process.env.VALORANT_GAME_NAME || "";
+const valorantTagLine = process.env.VALORANT_TAG_LINE || "";
 const riotClientPort = process.env.RIOT_CLIENT_PORT || "";
 const riotClientPassword = process.env.RIOT_CLIENT_PASSWORD || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
@@ -45,8 +47,21 @@ function requireBridgeKey(req, res) {
 
 function getMockPlayer() {
   return {
-    gameName: "ExamplePlayer",
-    tagLine: "NA1",
+    gameName: valorantGameName || "ExamplePlayer",
+    tagLine: valorantTagLine || "NA1",
+    puuid: valorantPUUID || "mock-puuid",
+    level: 111
+  };
+}
+
+function getTokenPlayer() {
+  if (!valorantGameName && !valorantTagLine && !valorantPUUID) {
+    return null;
+  }
+
+  return {
+    gameName: valorantGameName || "Unknown",
+    tagLine: valorantTagLine || "",
     puuid: valorantPUUID || "mock-puuid",
     level: 111
   };
@@ -98,12 +113,23 @@ async function fetchPlayerAlias() {
   }
 
   const credentials = Buffer.from(`riot:${riotClientPassword}`, "ascii").toString("base64");
-  const body = await requestLocalRiotJSON(
-    `https://127.0.0.1:${riotClientPort}/player-account/aliases/v1/active`,
-    {
-      Authorization: `Basic ${credentials}`
+  let body;
+
+  try {
+    body = await requestLocalRiotJSON(
+      `https://127.0.0.1:${riotClientPort}/player-account/aliases/v1/active`,
+      {
+        Authorization: `Basic ${credentials}`
+      }
+    );
+  } catch (error) {
+    const tokenPlayer = getTokenPlayer();
+    if (tokenPlayer) {
+      return tokenPlayer;
     }
-  );
+
+    throw error;
+  }
 
   return {
     gameName: body.game_name || "Unknown",

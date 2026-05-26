@@ -98,6 +98,23 @@ function parseAccessTokenRedirect(redirectURL) {
   };
 }
 
+function decodeJWTPayload(token) {
+  if (!token) {
+    return {};
+  }
+
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
+  } catch {
+    return {};
+  }
+}
+
 function readRiotSSID() {
   const settingsPath = path.join(
     process.env.LOCALAPPDATA || "",
@@ -242,10 +259,15 @@ async function main() {
     };
   }
 
+  const idTokenData = decodeJWTPayload(tokenResponse.idToken);
+  const account = idTokenData.acct || {};
+
   process.stdout.write(JSON.stringify({
     accessToken: getAccessToken(tokenResponse),
     entitlementsToken: getEntitlementsToken(tokenResponse),
     subject: tokenResponse.subject,
+    gameName: account.game_name,
+    tagLine: account.tag_line,
     clientVersion: readClientVersionFromLog() || await getLatestClientVersion()
   }));
 }

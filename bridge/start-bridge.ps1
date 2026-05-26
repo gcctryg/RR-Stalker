@@ -97,6 +97,14 @@ if ($tokenResponse.subject) {
     $env:VALORANT_PUUID = $tokenResponse.subject
 }
 
+if ($tokenResponse.gameName) {
+    $env:VALORANT_GAME_NAME = $tokenResponse.gameName
+}
+
+if ($tokenResponse.tagLine) {
+    $env:VALORANT_TAG_LINE = $tokenResponse.tagLine
+}
+
 if ($tokenResponse.clientVersion) {
     $env:VALORANT_CLIENT_VERSION = $tokenResponse.clientVersion
 }
@@ -114,6 +122,10 @@ Write-Host "Shard: $env:VALORANT_SHARD"
 
 if ($env:VALORANT_PUUID) {
     Write-Host "PUUID: $env:VALORANT_PUUID"
+}
+
+if ($env:VALORANT_GAME_NAME) {
+    Write-Host "Name: $env:VALORANT_GAME_NAME#$env:VALORANT_TAG_LINE"
 }
 
 if ($env:VALORANT_CLIENT_VERSION) {
