@@ -67,6 +67,36 @@ function getTokenPlayer() {
   };
 }
 
+async function fetchAccountLevel(puuid, shard) {
+  if (useMocks || !puuid || !shard || !valorantAccessToken || !valorantEntitlementsToken) {
+    return null;
+  }
+
+  const accountXP = await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/account-xp/v1/players/${encodeURIComponent(puuid)}`, {
+    errorMessage: "Riot account XP request failed.",
+    errorCode: "riot_account_xp_failed"
+  });
+
+  return accountXP?.Progress?.Level ?? null;
+}
+
+async function withAccountLevel(player, shard) {
+  try {
+    const level = await fetchAccountLevel(player.puuid, shard);
+
+    if (typeof level === "number") {
+      return {
+        ...player,
+        level
+      };
+    }
+  } catch {
+    // Keep player loading resilient if Account XP is temporarily unavailable.
+  }
+
+  return player;
+}
+
 function requestLocalRiotJSON(url, headers) {
   return new Promise((resolve, reject) => {
     const request = https.request(url, {
@@ -108,8 +138,10 @@ function requestLocalRiotJSON(url, headers) {
 }
 
 async function fetchPlayerAlias() {
+  const shard = valorantShard;
+
   if (useMocks || !riotClientPort || !riotClientPassword) {
-    return getMockPlayer();
+    return withAccountLevel(getMockPlayer(), shard);
   }
 
   const credentials = Buffer.from(`riot:${riotClientPassword}`, "ascii").toString("base64");
@@ -125,18 +157,18 @@ async function fetchPlayerAlias() {
   } catch (error) {
     const tokenPlayer = getTokenPlayer();
     if (tokenPlayer) {
-      return tokenPlayer;
+      return withAccountLevel(tokenPlayer, shard);
     }
 
     throw error;
   }
 
-  return {
+  return withAccountLevel({
     gameName: body.game_name || "Unknown",
     tagLine: body.tag_line || "",
     puuid: valorantPUUID || "mock-puuid",
     level: 111
-  };
+  }, shard);
 }
 
 function getMockWallet(puuid) {
