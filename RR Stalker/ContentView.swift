@@ -14,42 +14,7 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("RR Stalker")
-                            .font(.largeTitle.bold())
-
-                        if let player = bridge.player {
-                            Text("\(player.gameName)#\(player.tagLine)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Bridge connected player data")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Spacer()
-
-                    Button {
-                        Task {
-                            await bridge.loadPlayer()
-                        }
-                    } label: {
-                        if bridge.isLoading {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(bridge.isLoading)
-                    .accessibilityLabel(bridge.isLoading ? "Loading player data" : "Load player data")
-                }
+                HeaderBanner(bridge: bridge)
 
                 if let player = bridge.player {
                     VStack(alignment: .leading, spacing: 12) {
@@ -114,13 +79,56 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
                 }
 
-                Text("Bridge URL: \(bridge.baseURL.absoluteString)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
             }
             .padding()
         }
+    }
+}
+
+struct HeaderBanner: View {
+    @ObservedObject var bridge: PCBridgeClient
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("RR Stalker")
+                    .font(.title.bold())
+
+                Text(bridge.baseURL.absoluteString)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 12)
+
+            Button {
+                Task {
+                    await bridge.loadPlayer()
+                }
+            } label: {
+                ZStack {
+                    Image(systemName: "arrow.clockwise")
+                        .opacity(bridge.isLoading ? 0 : 1)
+
+                    if bridge.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+                .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(bridge.isLoading)
+            .accessibilityLabel(bridge.isLoading ? "Loading player data" : "Refresh player data")
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
