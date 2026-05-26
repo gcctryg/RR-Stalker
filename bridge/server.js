@@ -61,6 +61,47 @@ function getMockWallet(puuid) {
   };
 }
 
+function getMockStorefront() {
+  return {
+    offers: [
+      {
+        offerID: "mock-offer-1",
+        itemID: "mock-item-1",
+        name: "Mock Vandal Skin",
+        iconURL: null,
+        price: 1775,
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+      },
+      {
+        offerID: "mock-offer-2",
+        itemID: "mock-item-2",
+        name: "Mock Phantom Skin",
+        iconURL: null,
+        price: 1775,
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+      },
+      {
+        offerID: "mock-offer-3",
+        itemID: "mock-item-3",
+        name: "Mock Sheriff Skin",
+        iconURL: null,
+        price: 1275,
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+      },
+      {
+        offerID: "mock-offer-4",
+        itemID: "mock-item-4",
+        name: "Mock Operator Skin",
+        iconURL: null,
+        price: 2175,
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+      }
+    ],
+    durationRemainingInSeconds: 3600,
+    source: "mock"
+  };
+}
+
 function isValidShard(shard) {
   return /^[a-z0-9-]+$/i.test(shard);
 }
@@ -84,6 +125,54 @@ function getRiotHeaders() {
   }
 
   return headers;
+}
+
+const skinLevelCache = new Map();
+
+async function fetchSkinLevel(itemID) {
+  if (skinLevelCache.has(itemID)) {
+    return skinLevelCache.get(itemID);
+  }
+
+  const response = await fetch(`https://valorant-api.com/v1/weapons/skinlevels/${encodeURIComponent(itemID)}`);
+  if (!response.ok) {
+    return null;
+  }
+
+  const body = await response.json();
+  const skinLevel = body.data || null;
+  skinLevelCache.set(itemID, skinLevel);
+  return skinLevel;
+}
+
+async function fetchRiotJSON(url, options = {}) {
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers: {
+      ...getRiotHeaders(),
+      ...(options.headers || {})
+    },
+    body: options.body
+  });
+
+  const text = await response.text();
+  let body;
+
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { raw: text };
+  }
+
+  if (!response.ok) {
+    const error = new Error(options.errorMessage || "Riot request failed.");
+    error.statusCode = response.status;
+    error.code = options.errorCode || "riot_request_failed";
+    error.body = body;
+    throw error;
+  }
+
+  return body;
 }
 
 async function fetchWallet(puuid, shard) {
@@ -112,29 +201,69 @@ async function fetchWallet(puuid, shard) {
     throw error;
   }
 
-  const url = `https://pd.${shard}.a.pvp.net/store/v1/wallet/${encodeURIComponent(puuid)}`;
-  const response = await fetch(url, {
-    headers: getRiotHeaders()
+  return fetchRiotJSON(`https://pd.${shard}.a.pvp.net/store/v1/wallet/${encodeURIComponent(puuid)}`, {
+    errorMessage: "Riot wallet request failed.",
+    errorCode: "riot_wallet_failed"
   });
+}
 
-  const text = await response.text();
-  let body;
-
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    body = { raw: text };
+async function fetchStorefront(puuid, shard) {
+  if (useMocks) {
+    return getMockStorefront();
   }
 
-  if (!response.ok) {
-    const error = new Error("Riot wallet request failed.");
-    error.statusCode = response.status;
-    error.code = "riot_wallet_failed";
-    error.body = body;
+  if (!shard) {
+    const error = new Error("Set VALORANT_SHARD or pass ?shard=na to use storefront.");
+    error.statusCode = 400;
+    error.code = "missing_shard";
     throw error;
   }
 
-  return body;
+  if (!isValidShard(shard)) {
+    const error = new Error("Shard may only contain letters, numbers, and hyphens.");
+    error.statusCode = 400;
+    error.code = "invalid_shard";
+    throw error;
+  }
+
+  if (!valorantAccessToken || !valorantEntitlementsToken) {
+    const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
+    error.statusCode = 503;
+    error.code = "missing_riot_credentials";
+    throw error;
+  }
+
+  const storefront = await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/store/v3/storefront/${encodeURIComponent(puuid)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: "{}",
+    errorMessage: "Riot storefront request failed.",
+    errorCode: "riot_storefront_failed"
+  });
+  const layout = storefront.SkinsPanelLayout || {};
+  const offers = layout.SingleItemStoreOffers || [];
+  const enrichedOffers = await Promise.all(offers.slice(0, 4).map(async (offer) => {
+    const reward = (offer.Rewards || [])[0] || {};
+    const costEntries = Object.entries(offer.Cost || {});
+    const [currencyID, price] = costEntries[0] || ["", 0];
+    const skinLevel = reward.ItemID ? await fetchSkinLevel(reward.ItemID) : null;
+
+    return {
+      offerID: offer.OfferID,
+      itemID: reward.ItemID || offer.OfferID,
+      name: skinLevel?.displayName || reward.ItemID || offer.OfferID,
+      iconURL: skinLevel?.displayIcon || null,
+      price,
+      currencyID
+    };
+  }));
+
+  return {
+    offers: enrichedOffers,
+    durationRemainingInSeconds: layout.SingleItemOffersRemainingDurationInSeconds || 0
+  };
 }
 
 function getMockPartyQueues(partyID) {
@@ -199,6 +328,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathParts[0] === "storefront" && pathParts[1]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const storefront = await fetchStorefront(pathParts[1], shard);
+      sendJSON(res, 200, storefront);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "storefront_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (pathParts[0] === "parties" && pathParts[1] && pathParts[2] === "queues") {
     sendJSON(res, 200, getMockPartyQueues(pathParts[1]));
     return;
@@ -210,6 +354,7 @@ const server = http.createServer(async (req, res) => {
       "GET /health",
       "GET /player",
       "GET /wallet/:puuid",
+      "GET /storefront/:puuid",
       "GET /parties/:partyID/queues"
     ]
   });

@@ -12,7 +12,8 @@ struct ContentView: View {
     @StateObject private var bridge = PCBridgeClient()
 
     var body: some View {
-        VStack(spacing: 24) {
+        ScrollView {
+            VStack(spacing: 24) {
             VStack(spacing: 8) {
                 Image(systemName: "desktopcomputer")
                     .font(.system(size: 52))
@@ -66,6 +67,24 @@ struct ContentView: View {
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
 
+            if let storefront = bridge.storefront {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Current Shop")
+                            .font(.headline)
+                        Spacer()
+                        Text(storefront.remainingTimeText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    ForEach(storefront.offers) { offer in
+                        ShopOfferRow(offer: offer)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if let errorMessage = bridge.errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
@@ -80,12 +99,20 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
             }
 
+            if let storefrontErrorMessage = bridge.storefrontErrorMessage {
+                Text(storefrontErrorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+
             Text("Bridge URL: \(bridge.baseURL.absoluteString)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+            }
+            .padding()
         }
-        .padding()
     }
 }
 
@@ -105,12 +132,50 @@ struct InfoRow: View {
     }
 }
 
+struct ShopOfferRow: View {
+    let offer: BridgeStorefrontOffer
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: offer.iconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                default:
+                    Image(systemName: "questionmark.square.dashed")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 86, height: 58)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(offer.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+
+                Text("\(offer.price) VP")
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 @MainActor
 final class PCBridgeClient: ObservableObject {
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
+    @Published var storefront: BridgeStorefront?
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
+    @Published var storefrontErrorMessage: String?
     @Published var isLoading = false
 
     // Replace this with your PC's local IP address.
@@ -120,6 +185,7 @@ final class PCBridgeClient: ObservableObject {
         isLoading = true
         errorMessage = nil
         walletErrorMessage = nil
+        storefrontErrorMessage = nil
 
         do {
             let url = baseURL.appending(path: "player")
@@ -134,6 +200,16 @@ final class PCBridgeClient: ObservableObject {
             } catch {
                 wallet = nil
                 walletErrorMessage = "Player loaded, but wallet failed: \(error.localizedDescription)"
+            }
+
+            let storefrontURL = baseURL
+                .appending(path: "storefront")
+                .appending(path: loadedPlayer.puuid)
+            do {
+                storefront = try await fetchJSON(from: storefrontURL)
+            } catch {
+                storefront = nil
+                storefrontErrorMessage = "Player loaded, but shop failed: \(error.localizedDescription)"
             }
         } catch {
             errorMessage = "Could not load player data: \(error.localizedDescription)"
@@ -174,11 +250,17 @@ struct BridgeWallet: Decodable {
 
     var items: [BridgeWalletItem] {
         balances
-            .map { BridgeWalletItem(id: $0.key, name: BridgeWallet.currencyName(for: $0.key), amount: $0.value) }
+            .compactMap { id, amount in
+                guard let name = BridgeWallet.currencyName(for: id) else {
+                    return nil
+                }
+
+                return BridgeWalletItem(id: id, name: name, amount: amount)
+            }
             .sorted { $0.name < $1.name }
     }
 
-    private static func currencyName(for id: String) -> String {
+    private static func currencyName(for id: String) -> String? {
         switch id.lowercased() {
         case "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741":
             "Valorant Points"
@@ -187,7 +269,7 @@ struct BridgeWallet: Decodable {
         case "85ca954a-41f2-ce94-9b45-8ca3dd39a00d":
             "Kingdom Credits"
         default:
-            id
+            nil
         }
     }
 }
@@ -196,6 +278,30 @@ struct BridgeWalletItem: Identifiable {
     let id: String
     let name: String
     let amount: Int
+}
+
+struct BridgeStorefront: Decodable {
+    let offers: [BridgeStorefrontOffer]
+    let durationRemainingInSeconds: Int
+
+    var remainingTimeText: String {
+        let hours = durationRemainingInSeconds / 3600
+        let minutes = (durationRemainingInSeconds % 3600) / 60
+        return "\(hours)h \(minutes)m"
+    }
+}
+
+struct BridgeStorefrontOffer: Decodable, Identifiable {
+    let offerID: String
+    let itemID: String
+    let name: String
+    let iconURL: URL?
+    let price: Int
+    let currencyID: String
+
+    var id: String {
+        offerID
+    }
 }
 
 enum BridgeError: LocalizedError {

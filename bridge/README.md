@@ -77,6 +77,7 @@ Then test:
 curl http://localhost:3000/health
 curl http://localhost:3000/player
 curl http://localhost:3000/wallet/mock-puuid
+curl http://localhost:3000/storefront/mock-puuid
 curl http://localhost:3000/parties/mock-party-id/queues
 ```
 
@@ -119,6 +120,20 @@ You can also override the configured shard per request:
 ```text
 GET /wallet/:puuid?shard=na
 ```
+
+The private endpoint:
+
+```text
+https://pd.{shard}.a.pvp.net/store/v3/storefront/{puuid}
+```
+
+maps to this local bridge route:
+
+```text
+GET /storefront/:puuid
+```
+
+The bridge sends Riot a `POST` request with an empty JSON object body.
 
 The private endpoint:
 
