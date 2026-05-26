@@ -13,103 +13,111 @@ struct ContentView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-            VStack(spacing: 8) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 52))
-                    .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("RR Stalker")
+                            .font(.largeTitle.bold())
 
-                Text("RR Stalker")
-                    .font(.largeTitle.bold())
-
-                Text("Connect to your PC bridge to load player data.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button {
-                Task {
-                    await bridge.loadPlayer()
-                }
-            } label: {
-                Label(
-                    bridge.isLoading ? "Loading..." : "Load Player From PC",
-                    systemImage: "arrow.triangle.2.circlepath"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(bridge.isLoading)
-
-            if let player = bridge.player {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Player")
-                        .font(.headline)
-
-                    InfoRow(title: "Name", value: "\(player.gameName)#\(player.tagLine)")
-                    InfoRow(title: "Level", value: "\(player.level)")
-                    InfoRow(title: "PUUID", value: player.puuid)
-
-                    if let wallet = bridge.wallet {
-                        Divider()
-                        Text("Wallet")
-                            .font(.headline)
-
-                        ForEach(wallet.items) { item in
-                            InfoRow(title: item.name, value: "\(item.amount)")
+                        if let player = bridge.player {
+                            Text("\(player.gameName)#\(player.tagLine)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Bridge connected player data")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-            }
 
-            if let storefront = bridge.storefront {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Current Shop")
+                    Spacer()
+
+                    Button {
+                        Task {
+                            await bridge.loadPlayer()
+                        }
+                    } label: {
+                        if bridge.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(bridge.isLoading)
+                    .accessibilityLabel(bridge.isLoading ? "Loading player data" : "Load player data")
+                }
+
+                if let player = bridge.player {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Player")
                             .font(.headline)
-                        Spacer()
-                        Text(storefront.remainingTimeText)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
 
-                    ForEach(storefront.offers) { offer in
-                        ShopOfferRow(offer: offer)
+                        InfoRow(title: "Name", value: "\(player.gameName)#\(player.tagLine)")
+                        InfoRow(title: "Level", value: "\(player.level)")
+                        InfoRow(title: "PUUID", value: player.puuid)
+
+                        if let wallet = bridge.wallet {
+                            Divider()
+                            Text("Wallet")
+                                .font(.headline)
+
+                            ForEach(wallet.items) { item in
+                                InfoRow(title: item.name, value: "\(item.amount)")
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            if let errorMessage = bridge.errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
+                if let storefront = bridge.storefront {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Current Shop")
+                                .font(.headline)
+                            Spacer()
+                            Text(storefront.remainingTimeText)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
 
-            if let walletErrorMessage = bridge.walletErrorMessage {
-                Text(walletErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
-            }
+                        ForEach(storefront.offers) { offer in
+                            ShopOfferRow(offer: offer)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-            if let storefrontErrorMessage = bridge.storefrontErrorMessage {
-                Text(storefrontErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
-            }
+                if let errorMessage = bridge.errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
 
-            Text("Bridge URL: \(bridge.baseURL.absoluteString)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
+                if let walletErrorMessage = bridge.walletErrorMessage {
+                    Text(walletErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let storefrontErrorMessage = bridge.storefrontErrorMessage {
+                    Text(storefrontErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+
+                Text("Bridge URL: \(bridge.baseURL.absoluteString)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
             .padding()
         }
