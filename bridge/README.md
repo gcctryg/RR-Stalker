@@ -4,6 +4,31 @@ Tiny local bridge API for the iOS app.
 
 ## Run
 
+On Windows, start Riot Client and log in, then run:
+
+```powershell
+.\start-bridge.ps1 -Shard na
+```
+
+The script reads the Riot Client lockfile, fetches fresh access and entitlements
+tokens from the local client, sets the bridge environment variables, and starts
+the bridge. It also passes your token subject as `VALORANT_PUUID`, so `/player`
+can return your real PUUID for the iOS wallet request.
+
+If PowerShell blocks the script, run this once from the `bridge` folder:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Then run:
+
+```powershell
+.\start-bridge.ps1 -Shard na
+```
+
+Manual startup still works too:
+
 ```bash
 node server.js
 ```
@@ -24,8 +49,21 @@ In PowerShell:
 $env:VALORANT_SHARD = "na"
 $env:VALORANT_ACCESS_TOKEN = "your-access-token"
 $env:VALORANT_ENTITLEMENTS_TOKEN = "your-entitlements-token"
+$env:VALORANT_CLIENT_PLATFORM = "optional-value-from-insomnia"
+$env:VALORANT_CLIENT_VERSION = "optional-value-from-insomnia"
 node server.js
 ```
+
+If Riot returns `INVALID_HEADERS`, copy these request headers from the working
+Insomnia request too:
+
+```text
+X-Riot-ClientPlatform
+X-Riot-ClientVersion
+```
+
+`VALORANT_ACCESS_TOKEN` may be pasted either with or without the `Bearer`
+prefix.
 
 For local UI testing without Riot credentials:
 

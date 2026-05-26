@@ -7,6 +7,9 @@ const bridgeKey = process.env.RR_BRIDGE_KEY || "";
 const valorantShard = process.env.VALORANT_SHARD || "";
 const valorantAccessToken = process.env.VALORANT_ACCESS_TOKEN || "";
 const valorantEntitlementsToken = process.env.VALORANT_ENTITLEMENTS_TOKEN || "";
+const valorantClientPlatform = process.env.VALORANT_CLIENT_PLATFORM || "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9";
+const valorantClientVersion = process.env.VALORANT_CLIENT_VERSION || "";
+const valorantPUUID = process.env.VALORANT_PUUID || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
 
 function sendJSON(res, statusCode, body) {
@@ -41,7 +44,7 @@ function getMockPlayer() {
   return {
     gameName: "ExamplePlayer",
     tagLine: "NA1",
-    puuid: "mock-puuid",
+    puuid: valorantPUUID || "mock-puuid",
     level: 111
   };
 }
@@ -60,6 +63,27 @@ function getMockWallet(puuid) {
 
 function isValidShard(shard) {
   return /^[a-z0-9-]+$/i.test(shard);
+}
+
+function normalizeBearerToken(token) {
+  return token.replace(/^Bearer\s+/i, "").trim();
+}
+
+function getRiotHeaders() {
+  const headers = {
+    Authorization: `Bearer ${normalizeBearerToken(valorantAccessToken)}`,
+    "X-Riot-Entitlements-JWT": valorantEntitlementsToken.trim()
+  };
+
+  if (valorantClientPlatform) {
+    headers["X-Riot-ClientPlatform"] = valorantClientPlatform.trim();
+  }
+
+  if (valorantClientVersion) {
+    headers["X-Riot-ClientVersion"] = valorantClientVersion.trim();
+  }
+
+  return headers;
 }
 
 async function fetchWallet(puuid, shard) {
@@ -90,10 +114,7 @@ async function fetchWallet(puuid, shard) {
 
   const url = `https://pd.${shard}.a.pvp.net/store/v1/wallet/${encodeURIComponent(puuid)}`;
   const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${valorantAccessToken}`,
-      "X-Riot-Entitlements-JWT": valorantEntitlementsToken
-    }
+    headers: getRiotHeaders()
   });
 
   const text = await response.text();
