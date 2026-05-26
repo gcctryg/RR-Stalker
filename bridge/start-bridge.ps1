@@ -61,6 +61,9 @@ if ($parts.Count -lt 5) {
     throw "Riot Client lockfile did not have the expected format."
 }
 
+$riotPort = $parts[2]
+$riotPassword = $parts[3]
+
 $authHelperPath = Join-Path $PSScriptRoot "riot-auth.js"
 $tokenResponseJSON = node $authHelperPath $resolvedLockfilePath
 
@@ -87,6 +90,8 @@ if (-not $entitlementsToken) {
 $env:VALORANT_SHARD = $Shard
 $env:VALORANT_ACCESS_TOKEN = $accessToken
 $env:VALORANT_ENTITLEMENTS_TOKEN = $entitlementsToken
+$env:RIOT_CLIENT_PORT = $riotPort
+$env:RIOT_CLIENT_PASSWORD = $riotPassword
 
 if ($tokenResponse.subject) {
     $env:VALORANT_PUUID = $tokenResponse.subject

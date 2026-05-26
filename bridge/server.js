@@ -1,4 +1,5 @@
 const http = require("http");
+const https = require("https");
 const { URL } = require("url");
 
 const host = process.env.HOST || "0.0.0.0";
@@ -10,6 +11,8 @@ const valorantEntitlementsToken = process.env.VALORANT_ENTITLEMENTS_TOKEN || "";
 const valorantClientPlatform = process.env.VALORANT_CLIENT_PLATFORM || "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9";
 const valorantClientVersion = process.env.VALORANT_CLIENT_VERSION || "";
 const valorantPUUID = process.env.VALORANT_PUUID || "";
+const riotClientPort = process.env.RIOT_CLIENT_PORT || "";
+const riotClientPassword = process.env.RIOT_CLIENT_PASSWORD || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
 
 function sendJSON(res, statusCode, body) {
@@ -44,6 +47,67 @@ function getMockPlayer() {
   return {
     gameName: "ExamplePlayer",
     tagLine: "NA1",
+    puuid: valorantPUUID || "mock-puuid",
+    level: 111
+  };
+}
+
+function requestLocalRiotJSON(url, headers) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(url, {
+      method: "GET",
+      headers,
+      rejectUnauthorized: false
+    }, (response) => {
+      let text = "";
+
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        text += chunk;
+      });
+      response.on("end", () => {
+        let body;
+
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch {
+          body = { raw: text };
+        }
+
+        if (response.statusCode < 200 || response.statusCode > 299) {
+          const error = new Error("Riot account alias request failed.");
+          error.statusCode = response.statusCode;
+          error.code = "riot_account_alias_failed";
+          error.body = body;
+          reject(error);
+          return;
+        }
+
+        resolve(body);
+      });
+    });
+
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function fetchPlayerAlias() {
+  if (useMocks || !riotClientPort || !riotClientPassword) {
+    return getMockPlayer();
+  }
+
+  const credentials = Buffer.from(`riot:${riotClientPassword}`, "ascii").toString("base64");
+  const body = await requestLocalRiotJSON(
+    `https://127.0.0.1:${riotClientPort}/player-account/aliases/v1/active`,
+    {
+      Authorization: `Basic ${credentials}`
+    }
+  );
+
+  return {
+    gameName: body.game_name || "Unknown",
+    tagLine: body.tag_line || "",
     puuid: valorantPUUID || "mock-puuid",
     level: 111
   };
@@ -309,7 +373,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (requestURL.pathname === "/player") {
-    sendJSON(res, 200, getMockPlayer());
+    try {
+      const player = await fetchPlayerAlias();
+      sendJSON(res, 200, player);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "player_error",
+        message: error.message,
+        details: error.body
+      });
+    }
     return;
   }
 

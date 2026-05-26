@@ -13,7 +13,9 @@ On Windows, start Riot Client and log in, then run:
 The script reads the Riot Client lockfile, fetches fresh access and entitlements
 tokens from the local client, sets the bridge environment variables, and starts
 the bridge. It also passes your token subject as `VALORANT_PUUID`, so `/player`
-can return your real PUUID for the iOS wallet request.
+can return your real PUUID for the iOS wallet request. The bridge also uses the
+lockfile credentials to call Riot's local account alias endpoint so `/player`
+can return your real game name and tagline.
 
 If PowerShell blocks the script, run this once from the `bridge` folder:
 
