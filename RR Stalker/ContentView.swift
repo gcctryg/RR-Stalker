@@ -14,7 +14,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 24) {
             VStack(spacing: 8) {
-                Image(systemName: "desktopcomputer.and.iphone")
+                Image(systemName: "desktopcomputer")
                     .font(.system(size: 52))
                     .foregroundStyle(.red)
 
@@ -73,6 +73,13 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
             }
 
+            if let walletErrorMessage = bridge.walletErrorMessage {
+                Text(walletErrorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+
             Text("Bridge URL: \(bridge.baseURL.absoluteString)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -103,6 +110,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
     @Published var errorMessage: String?
+    @Published var walletErrorMessage: String?
     @Published var isLoading = false
 
     // Replace this with your PC's local IP address.
@@ -111,6 +119,7 @@ final class PCBridgeClient: ObservableObject {
     func loadPlayer() async {
         isLoading = true
         errorMessage = nil
+        walletErrorMessage = nil
 
         do {
             let url = baseURL.appending(path: "player")
@@ -120,7 +129,12 @@ final class PCBridgeClient: ObservableObject {
             let walletURL = baseURL
                 .appending(path: "wallet")
                 .appending(path: loadedPlayer.puuid)
-            wallet = try await fetchJSON(from: walletURL)
+            do {
+                wallet = try await fetchJSON(from: walletURL)
+            } catch {
+                wallet = nil
+                walletErrorMessage = "Player loaded, but wallet failed: \(error.localizedDescription)"
+            }
         } catch {
             errorMessage = "Could not load player data: \(error.localizedDescription)"
         }
@@ -136,7 +150,8 @@ final class PCBridgeClient: ObservableObject {
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw BridgeError.badStatus(httpResponse.statusCode)
+            let responseBody = String(data: data, encoding: .utf8)
+            throw BridgeError.badStatus(httpResponse.statusCode, url, responseBody)
         }
 
         return try JSONDecoder().decode(T.self, from: data)
@@ -185,14 +200,18 @@ struct BridgeWalletItem: Identifiable {
 
 enum BridgeError: LocalizedError {
     case invalidResponse
-    case badStatus(Int)
+    case badStatus(Int, URL, String?)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             "The PC bridge returned an invalid response."
-        case .badStatus(let statusCode):
-            "The PC bridge returned HTTP \(statusCode)."
+        case .badStatus(let statusCode, let url, let responseBody):
+            if let responseBody, !responseBody.isEmpty {
+                "HTTP \(statusCode) from \(url.path): \(responseBody)"
+            } else {
+                "HTTP \(statusCode) from \(url.path)."
+            }
         }
     }
 }
