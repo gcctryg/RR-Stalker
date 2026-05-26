@@ -4,6 +4,10 @@ const { URL } = require("url");
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const bridgeKey = process.env.RR_BRIDGE_KEY || "";
+const valorantShard = process.env.VALORANT_SHARD || "";
+const valorantAccessToken = process.env.VALORANT_ACCESS_TOKEN || "";
+const valorantEntitlementsToken = process.env.VALORANT_ENTITLEMENTS_TOKEN || "";
+const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
 
 function sendJSON(res, statusCode, body) {
   const payload = JSON.stringify(body, null, 2);
@@ -38,18 +42,78 @@ function getMockPlayer() {
     gameName: "ExamplePlayer",
     tagLine: "NA1",
     puuid: "mock-puuid",
-    level: 123
+    level: 111
   };
 }
 
-function getMockAccountXP(puuid) {
+function getMockWallet(puuid) {
   return {
     puuid,
-    level: 123,
-    xp: 4567,
-    nextLevelXP: 5000,
+    Balances: {
+      "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741": 1200,
+      "e59aa87c-4cbf-517a-5983-6e81511be9b7": 45,
+      "85ca954a-41f2-ce94-9b45-8ca3dd39a00d": 8000
+    },
     source: "mock"
   };
+}
+
+function isValidShard(shard) {
+  return /^[a-z0-9-]+$/i.test(shard);
+}
+
+async function fetchWallet(puuid, shard) {
+  if (useMocks) {
+    return getMockWallet(puuid);
+  }
+
+  if (!shard) {
+    const error = new Error("Set VALORANT_SHARD or pass ?shard=na to use wallet.");
+    error.statusCode = 400;
+    error.code = "missing_shard";
+    throw error;
+  }
+
+  if (!isValidShard(shard)) {
+    const error = new Error("Shard may only contain letters, numbers, and hyphens.");
+    error.statusCode = 400;
+    error.code = "invalid_shard";
+    throw error;
+  }
+
+  if (!valorantAccessToken || !valorantEntitlementsToken) {
+    const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
+    error.statusCode = 503;
+    error.code = "missing_riot_credentials";
+    throw error;
+  }
+
+  const url = `https://pd.${shard}.a.pvp.net/store/v1/wallet/${encodeURIComponent(puuid)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${valorantAccessToken}`,
+      "X-Riot-Entitlements-JWT": valorantEntitlementsToken
+    }
+  });
+
+  const text = await response.text();
+  let body;
+
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { raw: text };
+  }
+
+  if (!response.ok) {
+    const error = new Error("Riot wallet request failed.");
+    error.statusCode = response.status;
+    error.code = "riot_wallet_failed";
+    error.body = body;
+    throw error;
+  }
+
+  return body;
 }
 
 function getMockPartyQueues(partyID) {
@@ -99,8 +163,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathParts[0] === "account-xp" && pathParts[1]) {
-    sendJSON(res, 200, getMockAccountXP(pathParts[1]));
+  if (pathParts[0] === "wallet" && pathParts[1]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const wallet = await fetchWallet(pathParts[1], shard);
+      sendJSON(res, 200, wallet);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "wallet_error",
+        message: error.message,
+        details: error.body
+      });
+    }
     return;
   }
 
@@ -114,7 +188,7 @@ const server = http.createServer(async (req, res) => {
     routes: [
       "GET /health",
       "GET /player",
-      "GET /account-xp/:puuid",
+      "GET /wallet/:puuid",
       "GET /parties/:partyID/queues"
     ]
   });

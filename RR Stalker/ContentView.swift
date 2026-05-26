@@ -50,6 +50,16 @@ struct ContentView: View {
                     InfoRow(title: "Name", value: "\(player.gameName)#\(player.tagLine)")
                     InfoRow(title: "Level", value: "\(player.level)")
                     InfoRow(title: "PUUID", value: player.puuid)
+
+                    if let wallet = bridge.wallet {
+                        Divider()
+                        Text("Wallet")
+                            .font(.headline)
+
+                        ForEach(wallet.items) { item in
+                            InfoRow(title: item.name, value: "\(item.amount)")
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
@@ -91,6 +101,7 @@ struct InfoRow: View {
 @MainActor
 final class PCBridgeClient: ObservableObject {
     @Published var player: BridgePlayer?
+    @Published var wallet: BridgeWallet?
     @Published var errorMessage: String?
     @Published var isLoading = false
 
@@ -103,22 +114,32 @@ final class PCBridgeClient: ObservableObject {
 
         do {
             let url = baseURL.appending(path: "player")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let loadedPlayer: BridgePlayer = try await fetchJSON(from: url)
+            player = loadedPlayer
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw BridgeError.invalidResponse
-            }
-
-            guard (200...299).contains(httpResponse.statusCode) else {
-                throw BridgeError.badStatus(httpResponse.statusCode)
-            }
-
-            player = try JSONDecoder().decode(BridgePlayer.self, from: data)
+            let walletURL = baseURL
+                .appending(path: "wallet")
+                .appending(path: loadedPlayer.puuid)
+            wallet = try await fetchJSON(from: walletURL)
         } catch {
             errorMessage = "Could not load player data: \(error.localizedDescription)"
         }
 
         isLoading = false
+    }
+
+    private func fetchJSON<T: Decodable>(from url: URL) async throws -> T {
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BridgeError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw BridgeError.badStatus(httpResponse.statusCode)
+        }
+
+        return try JSONDecoder().decode(T.self, from: data)
     }
 }
 
@@ -127,6 +148,39 @@ struct BridgePlayer: Decodable {
     let tagLine: String
     let puuid: String
     let level: Int
+}
+
+struct BridgeWallet: Decodable {
+    let balances: [String: Int]
+
+    private enum CodingKeys: String, CodingKey {
+        case balances = "Balances"
+    }
+
+    var items: [BridgeWalletItem] {
+        balances
+            .map { BridgeWalletItem(id: $0.key, name: BridgeWallet.currencyName(for: $0.key), amount: $0.value) }
+            .sorted { $0.name < $1.name }
+    }
+
+    private static func currencyName(for id: String) -> String {
+        switch id.lowercased() {
+        case "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741":
+            "Valorant Points"
+        case "e59aa87c-4cbf-517a-5983-6e81511be9b7":
+            "Radianite"
+        case "85ca954a-41f2-ce94-9b45-8ca3dd39a00d":
+            "Kingdom Credits"
+        default:
+            id
+        }
+    }
+}
+
+struct BridgeWalletItem: Identifiable {
+    let id: String
+    let name: String
+    let amount: Int
 }
 
 enum BridgeError: LocalizedError {
