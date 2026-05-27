@@ -170,7 +170,7 @@ struct FriendRow: View {
                 }
             }
 
-            if let mmr = friend.mmr {
+            if let mmr = friend.mmr, mmr.hasRank {
                 HStack(spacing: 10) {
                     Text("\(mmr.rankedRating) RR")
                     Text("\(mmr.numberOfWins) wins")
@@ -180,6 +180,10 @@ struct FriendRow: View {
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+            } else if friend.mmr != nil {
+                Text("Unrated")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else if friend.mmrError != nil {
                 Text("Rank unavailable")
                     .font(.caption)
@@ -461,12 +465,34 @@ struct BridgeFriend: Decodable, Identifiable {
 }
 
 struct BridgeFriendMMR: Decodable {
-    let subject: String
+    let subject: String?
     let competitiveTier: Int
     let rankedRating: Int
     let leaderboardRank: Int
     let numberOfWins: Int
-    let seasonID: String
+    let seasonID: String?
+    let hasRank: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case subject
+        case competitiveTier
+        case rankedRating
+        case leaderboardRank
+        case numberOfWins
+        case seasonID
+        case hasRank
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        subject = try container.decodeIfPresent(String.self, forKey: .subject)
+        competitiveTier = try container.decodeIfPresent(Int.self, forKey: .competitiveTier) ?? 0
+        rankedRating = try container.decodeIfPresent(Int.self, forKey: .rankedRating) ?? 0
+        leaderboardRank = try container.decodeIfPresent(Int.self, forKey: .leaderboardRank) ?? 0
+        numberOfWins = try container.decodeIfPresent(Int.self, forKey: .numberOfWins) ?? 0
+        seasonID = try container.decodeIfPresent(String.self, forKey: .seasonID)
+        hasRank = try container.decodeIfPresent(Bool.self, forKey: .hasRank) ?? competitiveTier > 0
+    }
 
     var rankText: String {
         BridgeFriendMMR.rankName(for: competitiveTier)

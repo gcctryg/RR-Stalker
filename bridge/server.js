@@ -283,7 +283,8 @@ function getMockFriends() {
           rankedRating: 50,
           leaderboardRank: 0,
           numberOfWins: 12,
-          seasonID: "mock-season"
+          seasonID: "mock-season",
+          hasRank: true
         }
       },
       {
@@ -296,7 +297,8 @@ function getMockFriends() {
           rankedRating: 55,
           leaderboardRank: 0,
           numberOfWins: 64,
-          seasonID: "mock-season"
+          seasonID: "mock-season",
+          hasRank: true
         }
       }
     ],
@@ -723,7 +725,8 @@ function getLatestCompetitiveInfo(mmr) {
     rankedRating: latestUpdate.RankedRatingAfterUpdate || season.RankedRating || 0,
     leaderboardRank: season.LeaderboardRank || 0,
     numberOfWins: season.NumberOfWins || 0,
-    seasonID: latestSeasonID || season.SeasonID || ""
+    seasonID: latestSeasonID || season.SeasonID || "",
+    hasRank: Boolean(latestUpdate.TierAfterUpdate || season.CompetitiveTier)
   };
 }
 
