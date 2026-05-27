@@ -525,6 +525,10 @@ function getRiotHeaders() {
 }
 
 const skinLevelCache = new Map();
+const competitiveTierCache = {
+  loadedAt: 0,
+  tiers: new Map()
+};
 
 async function fetchSkinLevel(itemID) {
   if (skinLevelCache.has(itemID)) {
@@ -540,6 +544,53 @@ async function fetchSkinLevel(itemID) {
   const skinLevel = body.data || null;
   skinLevelCache.set(itemID, skinLevel);
   return skinLevel;
+}
+
+async function fetchCompetitiveTierAssets() {
+  if (Date.now() - competitiveTierCache.loadedAt < 3600000 && competitiveTierCache.tiers.size > 0) {
+    return competitiveTierCache.tiers;
+  }
+
+  const response = await fetch("https://valorant-api.com/v1/competitivetiers");
+  if (!response.ok) {
+    return competitiveTierCache.tiers;
+  }
+
+  const body = await response.json();
+  const tierSets = Array.isArray(body.data) ? body.data : [];
+  const latestTierSet = tierSets.at(-1);
+  const tiers = new Map();
+
+  for (const tier of latestTierSet?.tiers || []) {
+    tiers.set(tier.tier, {
+      name: formatRankName(tier.tierName),
+      smallIcon: tier.smallIcon || null,
+      largeIcon: tier.largeIcon || tier.smallIcon || null
+    });
+  }
+
+  competitiveTierCache.loadedAt = Date.now();
+  competitiveTierCache.tiers = tiers;
+  return tiers;
+}
+
+function formatRankName(rankName) {
+  if (!rankName) {
+    return "";
+  }
+
+  return rankName.toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+async function withCompetitiveTierAssets(mmrInfo) {
+  const tiers = await fetchCompetitiveTierAssets();
+  const tier = tiers.get(mmrInfo.competitiveTier);
+
+  return {
+    ...mmrInfo,
+    rankName: tier?.name || (mmrInfo.competitiveTier > 0 ? `Tier ${mmrInfo.competitiveTier}` : "Unrated"),
+    rankIconURL: tier?.smallIcon || tier?.largeIcon || null
+  };
 }
 
 async function fetchRiotJSON(url, options = {}) {
@@ -749,7 +800,9 @@ async function fetchPlayerMMR(puuid, shard) {
       leaderboardRank: 0,
       numberOfWins: 12,
       seasonID: "mock-season",
-      hasRank: true
+      hasRank: true,
+      rankName: "Platinum 1",
+      rankIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/smallicon.png"
     };
   }
 
@@ -781,7 +834,7 @@ async function fetchPlayerMMR(puuid, shard) {
     errorCode: "riot_player_mmr_failed"
   });
 
-  return getLatestCompetitiveInfo(mmr);
+  return withCompetitiveTierAssets(getLatestCompetitiveInfo(mmr));
 }
 
 async function fetchFirstFriendMMR(shard) {

@@ -181,7 +181,13 @@ GET /friends/mmr?puuids=:puuid,:puuid
 ```
 
 The iOS app saves favorite friend selections per signed-in player account, then
-only calls `/friends/mmr` for those favorite PUUIDs.
+only calls `/friends/mmr` for those favorite PUUIDs. The bridge enriches MMR
+results with rank names and icons from Valorant-API's public competitive tiers
+endpoint:
+
+```text
+https://valorant-api.com/v1/competitivetiers
+```
 
 The private endpoint:
 
