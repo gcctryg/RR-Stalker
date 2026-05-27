@@ -110,6 +110,7 @@ struct CurrentPlayerView: View {
 struct FriendListView: View {
     @ObservedObject var bridge: PCBridgeClient
     @State private var isSelectingFavorites = false
+    @StateObject private var competitiveTiers = CompetitiveTierStore()
 
     var body: some View {
         ScrollView {
@@ -139,7 +140,10 @@ struct FriendListView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(bridge.favoriteFriends) { friend in
-                            FriendRow(friend: friend)
+                            FriendRow(
+                                friend: friend,
+                                rankAsset: friend.mmr.flatMap { competitiveTiers.rankAsset(for: $0.competitiveTier) }
+                            )
                         }
                     }
                 }
@@ -164,6 +168,9 @@ struct FriendListView: View {
         }
         .sheet(isPresented: $isSelectingFavorites) {
             FriendFavoritePicker(bridge: bridge)
+        }
+        .task {
+            await competitiveTiers.load()
         }
     }
 }
@@ -226,61 +233,85 @@ struct FriendFavoritePicker: View {
 
 struct FriendRow: View {
     let friend: BridgeFriend
+    let rankAsset: CompetitiveTierAsset?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
+        HStack(spacing: 12) {
+            RankIconView(asset: rankAsset, mmr: friend.mmr)
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("\(friend.gameName)#\(friend.tagLine)")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
 
-                Spacer()
-
                 if let mmr = friend.mmr {
-                    HStack(spacing: 6) {
-                        AsyncImage(url: mmr.rankIconURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .scaledToFit()
-                            default:
-                                Image(systemName: "shield")
-                                    .foregroundStyle(.secondary)
-                            }
+                    Text(rankAsset?.displayName ?? mmr.rankName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let mmr = friend.mmr, mmr.hasRank {
+                    HStack(spacing: 10) {
+                        Text("\(mmr.rankedRating) RR")
+                        Text("\(mmr.numberOfWins) wins")
+                        if mmr.leaderboardRank > 0 {
+                            Text("#\(mmr.leaderboardRank)")
                         }
-                        .frame(width: 30, height: 30)
-
-                        Text(mmr.rankName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
                     }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                } else if friend.mmr != nil {
+                    Text("Unrated")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if friend.mmrError != nil {
+                    Text(friend.rankUnavailableText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            }
 
-            if let mmr = friend.mmr, mmr.hasRank {
-                HStack(spacing: 10) {
-                    Text("\(mmr.rankedRating) RR")
-                    Text("\(mmr.numberOfWins) wins")
-                    if mmr.leaderboardRank > 0 {
-                        Text("#\(mmr.leaderboardRank)")
-                    }
-                }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-            } else if friend.mmr != nil {
-                Text("Unrated")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if friend.mmrError != nil {
-                Text(friend.rankUnavailableText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(friend.puuid)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct RankIconView: View {
+    let asset: CompetitiveTierAsset?
+    let mmr: BridgeFriendMMR?
+
+    var body: some View {
+        ZStack {
+            if let iconURL = asset?.iconURL ?? mmr?.rankIconURL {
+                AsyncImage(url: iconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    default:
+                        fallbackIcon
+                    }
+                }
+            } else {
+                fallbackIcon
+            }
+        }
+        .frame(width: 48, height: 48)
+    }
+
+    private var fallbackIcon: some View {
+        Image(systemName: mmr?.hasRank == true ? "triangle.fill" : "minus.circle")
+            .font(.system(size: 28, weight: .semibold))
+            .foregroundStyle(asset?.color ?? .secondary)
     }
 }
 
@@ -522,7 +553,7 @@ final class PCBridgeClient: ObservableObject {
                     ranks[friend.puuid] = mmr
                 }
 
-                if let mmrError = friend.mmrError {
+                if friend.mmrError != nil {
                     errors[friend.puuid] = friend.rankUnavailableText
                 }
             }
@@ -696,6 +727,104 @@ struct BridgeFriendMMR: Decodable {
         hasRank = (try container.decodeIfPresent(Bool.self, forKey: .hasRank)) ?? (competitiveTier > 0)
         rankName = try container.decodeIfPresent(String.self, forKey: .rankName) ?? (competitiveTier > 0 ? "Tier \(competitiveTier)" : "Unrated")
         rankIconURL = try container.decodeIfPresent(URL.self, forKey: .rankIconURL)
+    }
+}
+
+@MainActor
+final class CompetitiveTierStore: ObservableObject {
+    @Published private var ranksByTier: [Int: CompetitiveTierAsset] = [:]
+
+    private var hasLoaded = false
+
+    func load() async {
+        guard !hasLoaded else {
+            return
+        }
+
+        do {
+            let url = URL(string: "https://valorant-api.com/v1/competitivetiers")!
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let response = try JSONDecoder().decode(CompetitiveTiersResponse.self, from: data)
+
+            if let latestTierSet = response.data.last {
+                ranksByTier = Dictionary(
+                    uniqueKeysWithValues: latestTierSet.tiers.map { tier in
+                        (tier.tier, CompetitiveTierAsset(tier: tier))
+                    }
+                )
+            }
+
+            hasLoaded = true
+        } catch {
+            ranksByTier = [:]
+        }
+    }
+
+    func rankAsset(for tier: Int) -> CompetitiveTierAsset? {
+        ranksByTier[tier]
+    }
+}
+
+struct CompetitiveTierAsset {
+    let tier: Int
+    let displayName: String
+    let iconURL: URL?
+    let color: Color
+
+    init(tier: CompetitiveTier) {
+        self.tier = tier.tier
+        displayName = tier.tierName
+        iconURL = tier.largeIcon ?? tier.rankTriangleUpIcon ?? tier.rankTriangleDownIcon ?? tier.smallIcon
+        color = Color(hex: tier.color) ?? .secondary
+    }
+}
+
+struct CompetitiveTiersResponse: Decodable {
+    let data: [CompetitiveTierSet]
+}
+
+struct CompetitiveTierSet: Decodable {
+    let tiers: [CompetitiveTier]
+}
+
+struct CompetitiveTier: Decodable {
+    let tier: Int
+    let tierName: String
+    let color: String
+    let smallIcon: URL?
+    let largeIcon: URL?
+    let rankTriangleDownIcon: URL?
+    let rankTriangleUpIcon: URL?
+}
+
+extension Color {
+    init?(hex: String) {
+        let trimmedHex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard let value = UInt64(trimmedHex, radix: 16) else {
+            return nil
+        }
+
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+
+        switch trimmedHex.count {
+        case 6:
+            red = Double((value & 0xFF0000) >> 16) / 255
+            green = Double((value & 0x00FF00) >> 8) / 255
+            blue = Double(value & 0x0000FF) / 255
+            alpha = 1
+        case 8:
+            red = Double((value & 0xFF000000) >> 24) / 255
+            green = Double((value & 0x00FF0000) >> 16) / 255
+            blue = Double((value & 0x0000FF00) >> 8) / 255
+            alpha = Double(value & 0x000000FF) / 255
+        default:
+            return nil
+        }
+
+        self = Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }
 }
 
