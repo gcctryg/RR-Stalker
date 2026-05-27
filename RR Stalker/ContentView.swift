@@ -40,8 +40,6 @@ struct LoadoutView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                ServerStatusPill(bridge: bridge)
-
                 Text("Loadout")
                     .font(.largeTitle.bold())
 
@@ -173,8 +171,6 @@ struct FriendListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                ServerStatusPill(bridge: bridge)
-
                 HStack {
                     Text("Friends")
                         .font(.largeTitle.bold())
