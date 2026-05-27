@@ -671,6 +671,86 @@ async function fetchStorefront(puuid, shard) {
   };
 }
 
+function getLatestCompetitiveInfo(mmr) {
+  const competitive = mmr?.QueueSkills?.competitive;
+  const seasons = competitive?.SeasonalInfoBySeasonID || {};
+  const latestUpdate = mmr?.LatestCompetitiveUpdate || {};
+  const latestSeasonID = latestUpdate.SeasonID;
+  const latestSeason = latestSeasonID ? seasons[latestSeasonID] : null;
+  const season = latestSeason || Object.values(seasons).at(-1) || {};
+
+  return {
+    subject: mmr?.Subject,
+    competitiveTier: latestUpdate.TierAfterUpdate || season.CompetitiveTier || 0,
+    rankedRating: latestUpdate.RankedRatingAfterUpdate || season.RankedRating || 0,
+    leaderboardRank: season.LeaderboardRank || 0,
+    numberOfWins: season.NumberOfWins || 0,
+    seasonID: latestSeasonID || season.SeasonID || ""
+  };
+}
+
+async function fetchPlayerMMR(puuid, shard) {
+  if (useMocks) {
+    return {
+      subject: puuid,
+      competitiveTier: 15,
+      rankedRating: 50,
+      leaderboardRank: 0,
+      numberOfWins: 12,
+      seasonID: "mock-season"
+    };
+  }
+
+  await refreshAuthState();
+
+  if (!shard) {
+    const error = new Error("Set VALORANT_SHARD or pass ?shard=na to use player MMR.");
+    error.statusCode = 400;
+    error.code = "missing_shard";
+    throw error;
+  }
+
+  if (!isValidShard(shard)) {
+    const error = new Error("Shard may only contain letters, numbers, and hyphens.");
+    error.statusCode = 400;
+    error.code = "invalid_shard";
+    throw error;
+  }
+
+  if (!authState.accessToken || !authState.entitlementsToken) {
+    const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
+    error.statusCode = 503;
+    error.code = "missing_riot_credentials";
+    throw error;
+  }
+
+  const mmr = await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/mmr/v1/players/${encodeURIComponent(puuid)}`, {
+    errorMessage: "Riot player MMR request failed.",
+    errorCode: "riot_player_mmr_failed"
+  });
+
+  return getLatestCompetitiveInfo(mmr);
+}
+
+async function fetchFirstFriendMMR(shard) {
+  const friends = await fetchFriends();
+  const friend = friends.friends[0];
+
+  if (!friend) {
+    const error = new Error("No friends found to test MMR.");
+    error.statusCode = 404;
+    error.code = "no_friends_found";
+    throw error;
+  }
+
+  const mmr = await fetchPlayerMMR(friend.puuid, shard);
+
+  return {
+    friend,
+    mmr
+  };
+}
+
 function getMockPartyQueues(partyID) {
   return {
     partyID,
@@ -757,6 +837,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (requestURL.pathname === "/friends/first-mmr") {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const result = await fetchFirstFriendMMR(shard);
+      sendJSON(res, 200, result);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "friend_mmr_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (requestURL.pathname === "/friends") {
     try {
       const friends = await fetchFriends();
@@ -764,6 +859,21 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       sendJSON(res, error.statusCode || 500, {
         error: error.code || "friends_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
+  if (pathParts[0] === "mmr" && pathParts[1]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const result = await fetchPlayerMMR(pathParts[1], shard);
+      sendJSON(res, 200, result);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "mmr_error",
         message: error.message,
         details: error.body
       });
@@ -784,6 +894,8 @@ const server = http.createServer(async (req, res) => {
       "GET /wallet/:puuid",
       "GET /storefront/:puuid",
       "GET /friends",
+      "GET /friends/first-mmr",
+      "GET /mmr/:puuid",
       "GET /parties/:partyID/queues"
     ]
   });
