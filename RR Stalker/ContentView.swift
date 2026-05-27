@@ -12,6 +12,29 @@ struct ContentView: View {
     @StateObject private var bridge = PCBridgeClient()
 
     var body: some View {
+        TabView {
+            CurrentPlayerView(bridge: bridge)
+                .tabItem {
+                    Label("Current Player", systemImage: "person.crop.circle")
+                }
+
+            FriendListView(bridge: bridge)
+                .tabItem {
+                    Label("Friends", systemImage: "person.2")
+                }
+
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                }
+        }
+    }
+}
+
+struct CurrentPlayerView: View {
+    @ObservedObject var bridge: PCBridgeClient
+
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HeaderBanner(bridge: bridge)
@@ -58,22 +81,6 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                if let friends = bridge.friends {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Friends")
-                            .font(.headline)
-
-                        ForEach(friends.friends) { friend in
-                            Text("\(friend.gameName)#\(friend.tagLine)")
-                                .font(.footnote.monospaced())
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                }
-
                 if let errorMessage = bridge.errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
@@ -94,6 +101,42 @@ struct ContentView: View {
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
                 }
+            }
+            .padding()
+        }
+    }
+}
+
+struct FriendListView: View {
+    @ObservedObject var bridge: PCBridgeClient
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Friends")
+                    .font(.largeTitle.bold())
+
+                if let friends = bridge.friends {
+                    if friends.friends.isEmpty {
+                        ContentUnavailableView(
+                            "No Friends Loaded",
+                            systemImage: "person.2.slash",
+                            description: Text("Refresh the current player data to load your friend list.")
+                        )
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(friends.friends) { friend in
+                                FriendRow(friend: friend)
+                            }
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Friend List Empty",
+                        systemImage: "person.2",
+                        description: Text("Use the refresh button on Current Player to load friend data.")
+                    )
+                }
 
                 if let friendsErrorMessage = bridge.friendsErrorMessage {
                     Text(friendsErrorMessage)
@@ -101,10 +144,37 @@ struct ContentView: View {
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
                 }
-
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
         }
+    }
+}
+
+struct FriendRow: View {
+    let friend: BridgeFriend
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(friend.gameName)#\(friend.tagLine)")
+                .font(.subheadline.weight(.semibold))
+
+            Text(friend.puuid)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct SettingsView: View {
+    var body: some View {
+        Text("")
     }
 }
 
