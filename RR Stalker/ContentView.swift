@@ -352,7 +352,7 @@ struct FriendRow: View {
     }
 
     private var tertiaryTextStyle: Color {
-        hasCardBackground ? .white.opacity(0.72) : .tertiary
+        hasCardBackground ? .white.opacity(0.72) : .secondary.opacity(0.72)
     }
 }
 
