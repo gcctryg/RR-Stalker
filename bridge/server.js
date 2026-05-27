@@ -82,18 +82,29 @@ function writeCachedJSON(name, body) {
   }
 }
 
-async function fetchValorantAPIJSON(url, cacheName) {
+async function fetchValorantAPIJSON(url, cacheName, options = {}) {
   try {
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Valorant-API returned HTTP ${response.status}`);
+      const error = new Error(`Valorant-API returned HTTP ${response.status}`);
+      error.statusCode = response.status;
+      throw error;
     }
 
     const body = await response.json();
     writeCachedJSON(cacheName, body);
     return body;
-  } catch {
-    return readCachedJSON(cacheName)?.body || null;
+  } catch (error) {
+    const cached = readCachedJSON(cacheName)?.body || null;
+    if (options.returnMeta) {
+      return {
+        body: cached,
+        errorStatus: error.statusCode || null,
+        usedCache: Boolean(cached)
+      };
+    }
+
+    return cached;
   }
 }
 
@@ -477,9 +488,15 @@ async function fetchFriendsCards(puuids) {
       return null;
     }
 
-    const card = await fetchPlayerCard(playerCardID);
+    const cardResult = await fetchPlayerCard(playerCardID);
+    const card = cardResult.card;
     if (!card) {
-      missing.push({ puuid, reason: "player_card_asset_not_found", playerCardID });
+      missing.push({
+        puuid,
+        reason: cardResult.errorStatus === 429 ? "player_card_rate_limited" : "player_card_asset_not_found",
+        playerCardID,
+        httpStatus: cardResult.errorStatus || null
+      });
     }
 
     return {
@@ -880,20 +897,37 @@ function firstURL(...urls) {
 
 async function fetchPlayerCard(cardID) {
   if (!cardID) {
-    return null;
+    return {
+      card: null,
+      errorStatus: null,
+      usedCache: false
+    };
   }
 
   if (playerCardCache.has(cardID)) {
-    return playerCardCache.get(cardID);
+    return {
+      card: playerCardCache.get(cardID),
+      errorStatus: null,
+      usedCache: true
+    };
   }
 
-  const body = await fetchValorantAPIJSON(
+  const result = await fetchValorantAPIJSON(
     `https://valorant-api.com/v1/playercards/${encodeURIComponent(cardID)}`,
-    `playercard-${cardID}`
+    `playercard-${cardID}`,
+    { returnMeta: true }
   );
-  const card = body?.data || null;
-  playerCardCache.set(cardID, card);
-  return card;
+  const card = result.body?.data || null;
+
+  if (card) {
+    playerCardCache.set(cardID, card);
+  }
+
+  return {
+    card,
+    errorStatus: result.errorStatus,
+    usedCache: result.usedCache
+  };
 }
 
 function normalizeWeaponCategory(category) {

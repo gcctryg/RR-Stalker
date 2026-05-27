@@ -217,6 +217,13 @@ struct FriendListView: View {
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
                 }
+
+                if let friendCardStatusMessage = bridge.friendCardStatusMessage {
+                    Text(friendCardStatusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
@@ -613,6 +620,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var storefrontErrorMessage: String?
     @Published var loadoutErrorMessage: String?
     @Published var friendsErrorMessage: String?
+    @Published var friendCardStatusMessage: String?
     @Published var isLoading = false
 
     // Replace this with your PC's local IP address.
@@ -645,6 +653,7 @@ final class PCBridgeClient: ObservableObject {
         storefrontErrorMessage = nil
         loadoutErrorMessage = nil
         friendsErrorMessage = nil
+        friendCardStatusMessage = nil
 
         do {
             let url = baseURL.appending(path: "player")
@@ -724,6 +733,7 @@ final class PCBridgeClient: ObservableObject {
             favoriteFriendRanks = [:]
             favoriteFriendRankErrors = [:]
             favoriteFriendCards = [:]
+            friendCardStatusMessage = nil
             return
         }
 
@@ -765,6 +775,7 @@ final class PCBridgeClient: ObservableObject {
     func loadFavoriteFriendCards() async {
         guard !favoriteFriendIDs.isEmpty else {
             favoriteFriendCards = [:]
+            friendCardStatusMessage = nil
             return
         }
 
@@ -790,8 +801,9 @@ final class PCBridgeClient: ObservableObject {
             }
 
             favoriteFriendCards = cards
+            friendCardStatusMessage = cardResponse.shortStatusMessage
         } catch {
-            // Friend cards are decorative, so keep the last good cards and avoid noisy UI errors.
+            friendCardStatusMessage = "Cards: fetch failed"
         }
     }
 
@@ -1018,6 +1030,22 @@ struct BridgeFriend: Decodable, Identifiable {
 struct BridgeFriendCardsResponse: Decodable {
     let cards: [BridgeFriendCard]
     let missing: [BridgeFriendCardMissing]?
+
+    var shortStatusMessage: String? {
+        guard let missing, !missing.isEmpty else {
+            return nil
+        }
+
+        let grouped = Dictionary(grouping: missing, by: \.shortReason)
+            .mapValues(\.count)
+            .sorted { $0.key < $1.key }
+            .map { reason, count in
+                "\(count) \(reason)"
+            }
+            .joined(separator: ", ")
+
+        return "Cards: \(missing.count) missing (\(grouped))"
+    }
 }
 
 struct BridgeFriendCard: Decodable {
@@ -1037,6 +1065,23 @@ struct BridgeFriendCard: Decodable {
 struct BridgeFriendCardMissing: Decodable {
     let puuid: String
     let reason: String
+
+    var shortReason: String {
+        switch reason {
+        case "player_card_rate_limited":
+            "rate limited"
+        case "presence_not_found":
+            "no presence"
+        case "private_presence_missing_or_invalid":
+            "no private"
+        case "player_card_id_not_found":
+            "no card id"
+        case "player_card_asset_not_found":
+            "no asset"
+        default:
+            reason.replacingOccurrences(of: "_", with: " ")
+        }
+    }
 }
 
 struct BridgeFriendMMR: Decodable {
