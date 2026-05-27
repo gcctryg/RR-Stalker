@@ -85,6 +85,7 @@ curl http://localhost:3000/player
 curl http://localhost:3000/wallet/mock-puuid
 curl http://localhost:3000/storefront/mock-puuid
 curl http://localhost:3000/friends
+curl http://localhost:3000/friends/first-mmr
 curl http://localhost:3000/parties/mock-party-id/queues
 ```
 
@@ -141,6 +142,22 @@ GET /storefront/:puuid
 ```
 
 The bridge sends Riot a `POST` request with an empty JSON object body.
+
+The private endpoint:
+
+```text
+https://pd.{shard}.a.pvp.net/mmr/v1/players/{puuid}
+```
+
+maps to these local bridge test routes:
+
+```text
+GET /mmr/:puuid
+GET /friends/first-mmr
+```
+
+`/friends/first-mmr` loads the first friend from `/friends`, then tries the MMR
+endpoint with that friend's PUUID.
 
 The private endpoint:
 
