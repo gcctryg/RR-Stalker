@@ -46,6 +46,30 @@ function Get-RiotClientLockfilePath {
     return $null
 }
 
+function Get-ValorantRemotingInfo {
+    $processes = Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.Name -like "VALORANT*.exe" -and
+            $_.CommandLine -and
+            $_.CommandLine -match "-remoting-app-port="
+        }
+
+    foreach ($process in $processes) {
+        $commandLine = $process.CommandLine
+        $portMatch = [regex]::Match($commandLine, "-remoting-app-port=([0-9]+)")
+        $tokenMatch = [regex]::Match($commandLine, "-remoting-auth-token=([^\s]+)")
+
+        if ($portMatch.Success -and $tokenMatch.Success) {
+            return @{
+                Port = $portMatch.Groups[1].Value
+                Token = $tokenMatch.Groups[1].Value
+            }
+        }
+    }
+
+    return $null
+}
+
 $resolvedLockfilePath = Get-RiotClientLockfilePath -ExplicitPath $LockfilePath
 
 if (-not $resolvedLockfilePath) {
@@ -63,6 +87,7 @@ if ($parts.Count -lt 5) {
 
 $riotPort = $parts[2]
 $riotPassword = $parts[3]
+$valorantRemotingInfo = Get-ValorantRemotingInfo
 
 $authHelperPath = Join-Path $PSScriptRoot "riot-auth.js"
 $tokenResponseJSON = node $authHelperPath $resolvedLockfilePath
@@ -93,6 +118,11 @@ $env:VALORANT_ENTITLEMENTS_TOKEN = $entitlementsToken
 $env:RIOT_CLIENT_PORT = $riotPort
 $env:RIOT_CLIENT_PASSWORD = $riotPassword
 $env:RIOT_LOCKFILE_PATH = $resolvedLockfilePath
+
+if ($valorantRemotingInfo) {
+    $env:VALORANT_REMOTING_PORT = $valorantRemotingInfo.Port
+    $env:VALORANT_REMOTING_AUTH_TOKEN = $valorantRemotingInfo.Token
+}
 
 if ($tokenResponse.subject) {
     $env:VALORANT_PUUID = $tokenResponse.subject
@@ -131,6 +161,12 @@ if ($env:VALORANT_GAME_NAME) {
 
 if ($env:VALORANT_CLIENT_VERSION) {
     Write-Host "Client version: $env:VALORANT_CLIENT_VERSION"
+}
+
+if ($env:VALORANT_REMOTING_PORT) {
+    Write-Host "VALORANT remoting port: $env:VALORANT_REMOTING_PORT"
+} else {
+    Write-Warning "VALORANT remoting port was not found. Launch VALORANT to the main menu before using local chat/friends endpoints."
 }
 
 if ($PrintTokens) {

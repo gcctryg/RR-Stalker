@@ -18,6 +18,8 @@ const initialValorantTagLine = process.env.VALORANT_TAG_LINE || "";
 const riotClientPort = process.env.RIOT_CLIENT_PORT || "";
 const riotClientPassword = process.env.RIOT_CLIENT_PASSWORD || "";
 const riotLockfilePath = process.env.RIOT_LOCKFILE_PATH || "";
+const valorantRemotingPort = process.env.VALORANT_REMOTING_PORT || "";
+const valorantRemotingAuthToken = process.env.VALORANT_REMOTING_AUTH_TOKEN || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
 const authState = {
   accessToken: initialValorantAccessToken,
@@ -181,7 +183,7 @@ async function withAccountLevel(player, shard) {
   return player;
 }
 
-function requestLocalRiotJSON(url, headers) {
+function requestLocalRiotJSON(url, headers, errorCode = "riot_local_request_failed") {
   return new Promise((resolve, reject) => {
     const request = https.request(url, {
       method: "GET",
@@ -206,7 +208,7 @@ function requestLocalRiotJSON(url, headers) {
         if (response.statusCode < 200 || response.statusCode > 299) {
           const error = new Error("Riot local request failed.");
           error.statusCode = response.statusCode;
-          error.code = "riot_account_alias_failed";
+          error.code = errorCode;
           error.body = body;
           reject(error);
           return;
@@ -228,6 +230,13 @@ function getLocalRiotAuthHeaders() {
   };
 }
 
+function getValorantLocalAuthHeaders() {
+  const credentials = Buffer.from(`riot:${valorantRemotingAuthToken}`, "ascii").toString("base64");
+  return {
+    Authorization: `Basic ${credentials}`
+  };
+}
+
 async function fetchPlayerAlias() {
   const shard = valorantShard;
   await refreshAuthState({ force: true });
@@ -241,7 +250,8 @@ async function fetchPlayerAlias() {
   try {
     body = await requestLocalRiotJSON(
       `https://127.0.0.1:${riotClientPort}/player-account/aliases/v1/active`,
-      getLocalRiotAuthHeaders()
+      getLocalRiotAuthHeaders(),
+      "riot_account_alias_failed"
     );
   } catch (error) {
     const tokenPlayer = getTokenPlayer();
@@ -278,30 +288,146 @@ function getMockFriends() {
   };
 }
 
+function normalizeFriend(friend) {
+  return {
+    puuid: friend.puuid || friend.PUUID || friend.pid || friend.id || "",
+    gameName: friend.game_name || friend.gameName || friend.name || friend.Name || "Unknown",
+    tagLine: friend.game_tag || friend.gameTag || friend.tagLine || friend.tag_line || friend.TagLine || ""
+  };
+}
+
+function normalizeFriendsBody(body) {
+  const rawFriends = body.friends || body.Friends || body.data || [];
+
+  return rawFriends
+    .map(normalizeFriend)
+    .filter((friend) => friend.puuid || friend.gameName !== "Unknown" || friend.tagLine);
+}
+
 async function fetchFriends() {
   if (useMocks) {
     return getMockFriends();
   }
 
-  if (!riotClientPort || !riotClientPassword) {
-    const error = new Error("Start the bridge with start-bridge.ps1 to load Riot Client friends.");
+  if (!riotClientPort && !valorantRemotingPort) {
+    const error = new Error("Start the bridge with start-bridge.ps1 to load Riot friends.");
     error.statusCode = 503;
-    error.code = "missing_riot_client_credentials";
+    error.code = "missing_local_riot_credentials";
     throw error;
   }
 
-  const body = await requestLocalRiotJSON(
-    `https://127.0.0.1:${riotClientPort}/chat/v4/friends`,
-    getLocalRiotAuthHeaders()
-  );
-  const friends = (body.friends || []).map((friend) => ({
-    puuid: friend.puuid,
-    gameName: friend.game_name || friend.name || "Unknown",
-    tagLine: friend.game_tag || ""
-  }));
+  const sources = [];
+
+  if (riotClientPort && riotClientPassword) {
+    sources.push({
+      name: "riot-client",
+      port: riotClientPort,
+      headers: getLocalRiotAuthHeaders(),
+      paths: ["/chat/v4/friends", "/chat/v4/friends/"]
+    });
+  }
+
+  if (valorantRemotingPort && valorantRemotingAuthToken) {
+    sources.push({
+      name: "valorant-remoting",
+      port: valorantRemotingPort,
+      headers: getValorantLocalAuthHeaders(),
+      paths: ["/chat/v4/friends", "/chat/v4/friends/"]
+    });
+  }
+
+  const attempts = [];
+  let body = null;
+  let source = "";
+
+  for (const localSource of sources) {
+    for (const friendsPath of localSource.paths) {
+      try {
+        body = await requestLocalRiotJSON(
+          `https://127.0.0.1:${localSource.port}${friendsPath}`,
+          localSource.headers,
+          "riot_friends_failed"
+        );
+        source = localSource.name;
+        break;
+      } catch (error) {
+        attempts.push({
+          source: localSource.name,
+          path: friendsPath,
+          error: error.body || error.message
+        });
+      }
+    }
+
+    if (body) {
+      break;
+    }
+  }
+
+  if (!body) {
+    for (const localSource of sources) {
+      try {
+        const presenceBody = await requestLocalRiotJSON(
+          `https://127.0.0.1:${localSource.port}/chat/v4/presences`,
+          localSource.headers,
+          "riot_presence_failed"
+        );
+        const seenPUUIDs = new Set();
+        const friends = (presenceBody.presences || [])
+          .filter((presence) => presence.puuid && presence.puuid !== authState.puuid)
+          .filter((presence) => {
+            if (seenPUUIDs.has(presence.puuid)) {
+              return false;
+            }
+
+            seenPUUIDs.add(presence.puuid);
+            return true;
+          })
+          .map(normalizeFriend);
+
+        return {
+          friends,
+          source: `${localSource.name}:presences`
+        };
+      } catch (error) {
+        attempts.push({
+          source: localSource.name,
+          path: "/chat/v4/presences",
+          error: error.body || error.message
+        });
+      }
+    }
+  }
+
+  if (!body) {
+    let help = null;
+
+    try {
+      const helpSource = sources[0];
+      help = await requestLocalRiotJSON(
+        `https://127.0.0.1:${helpSource.port}/help`,
+        helpSource.headers,
+        "riot_help_failed"
+      );
+    } catch (error) {
+      help = error.body || error.message;
+    }
+
+    const error = new Error("Riot local friends endpoints were not available.");
+    error.statusCode = 502;
+    error.code = "riot_friends_unavailable";
+    error.body = {
+      attempts,
+      help
+    };
+    throw error;
+  }
+
+  const friends = normalizeFriendsBody(body);
 
   return {
-    friends
+    friends,
+    source
   };
 }
 

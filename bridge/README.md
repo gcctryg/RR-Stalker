@@ -17,6 +17,10 @@ can return your real PUUID for the iOS wallet request. The bridge also uses the
 lockfile credentials to call Riot's local account alias endpoint so `/player`
 can return your real game name and tagline.
 
+Launch VALORANT to the main menu before starting the bridge if you want friends
+or other local chat data. The script reads VALORANT's remoting port/token from
+the running game process for those endpoints.
+
 If PowerShell blocks the script, run this once from the `bridge` folder:
 
 ```powershell
