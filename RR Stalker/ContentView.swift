@@ -40,6 +40,8 @@ struct LoadoutView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                ServerStatusPill(bridge: bridge)
+
                 Text("Loadout")
                     .font(.largeTitle.bold())
 
@@ -171,6 +173,8 @@ struct FriendListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                ServerStatusPill(bridge: bridge)
+
                 HStack {
                     Text("Friends")
                         .font(.largeTitle.bold())
@@ -391,6 +395,31 @@ struct SettingsView: View {
     }
 }
 
+struct ServerStatusPill: View {
+    @ObservedObject var bridge: PCBridgeClient
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(bridge.isServerOnline ? .green : .red)
+                .frame(width: 9, height: 9)
+
+            Text(bridge.isServerOnline ? "Server Online" : "Server Offline")
+                .font(.caption.weight(.semibold))
+
+            if let lastFetchText = bridge.lastFetchText {
+                Text(lastFetchText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: Capsule())
+    }
+}
+
 struct HeaderBanner: View {
     @ObservedObject var bridge: PCBridgeClient
     @State private var isShowingSettings = false
@@ -401,12 +430,16 @@ struct HeaderBanner: View {
                 Text("RR Stalker")
                     .font(.title.bold())
 
-                Text(bridge.baseURL.absoluteString)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 2) {
+                    ServerStatusPill(bridge: bridge)
+
+                    Text(bridge.baseURL.absoluteString)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
             }
 
             Spacer(minLength: 12)
@@ -670,6 +703,7 @@ struct LoadoutWeaponCard: View {
 @MainActor
 final class PCBridgeClient: ObservableObject {
     private let favoriteFriendIDsKeyPrefix = "favoriteFriendIDs"
+    private let cacheKey = "bridgeLastSnapshot"
 
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
@@ -686,12 +720,25 @@ final class PCBridgeClient: ObservableObject {
     @Published var loadoutErrorMessage: String?
     @Published var friendsErrorMessage: String?
     @Published var isLoading = false
+    @Published var isServerOnline = false
+    @Published var lastFetchedAt: Date?
 
     // Replace this with your PC's local IP address.
     let baseURL = URL(string: "http://192.168.0.14:3000")!
 
     init() {
         favoriteFriendIDs = []
+        loadCachedSnapshot()
+    }
+
+    var lastFetchText: String? {
+        guard let lastFetchedAt else {
+            return nil
+        }
+
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return "Last fetch \(formatter.localizedString(for: lastFetchedAt, relativeTo: Date()))"
     }
 
     var favoriteFriends: [BridgeFriend] {
@@ -719,6 +766,8 @@ final class PCBridgeClient: ObservableObject {
         friendsErrorMessage = nil
 
         do {
+            try await checkHealth()
+
             let url = baseURL.appending(path: "player")
             let loadedPlayer: BridgePlayer = try await fetchJSON(from: url)
             let previousPlayerPUUID = player?.puuid
@@ -728,6 +777,10 @@ final class PCBridgeClient: ObservableObject {
                 favoriteFriendRanks = [:]
                 favoriteFriendRankErrors = [:]
                 favoriteFriendStatuses = [:]
+                wallet = nil
+                storefront = nil
+                loadout = nil
+                friends = nil
             }
 
             let walletURL = baseURL
@@ -736,7 +789,6 @@ final class PCBridgeClient: ObservableObject {
             do {
                 wallet = try await fetchJSON(from: walletURL)
             } catch {
-                wallet = nil
                 walletErrorMessage = "Player loaded, but wallet failed: \(error.localizedDescription)"
             }
 
@@ -746,7 +798,6 @@ final class PCBridgeClient: ObservableObject {
             do {
                 storefront = try await fetchJSON(from: storefrontURL)
             } catch {
-                storefront = nil
                 storefrontErrorMessage = "Player loaded, but shop failed: \(error.localizedDescription)"
             }
 
@@ -756,7 +807,6 @@ final class PCBridgeClient: ObservableObject {
             do {
                 loadout = try await fetchJSON(from: loadoutURL)
             } catch {
-                loadout = nil
                 loadoutErrorMessage = "Player loaded, but loadout failed: \(error.localizedDescription)"
             }
 
@@ -766,10 +816,13 @@ final class PCBridgeClient: ObservableObject {
                 await loadFavoriteFriendRanks()
                 await loadFavoriteFriendStatuses()
             } catch {
-                friends = nil
                 friendsErrorMessage = "Player loaded, but friends failed: \(error.localizedDescription)"
             }
+
+            lastFetchedAt = Date()
+            saveCachedSnapshot()
         } catch {
+            isServerOnline = false
             errorMessage = "Could not load player data: \(error.localizedDescription)"
         }
 
@@ -829,6 +882,7 @@ final class PCBridgeClient: ObservableObject {
 
             favoriteFriendRanks = ranks
             favoriteFriendRankErrors = errors
+            saveCachedSnapshot()
         } catch {
             friendsErrorMessage = "Favorite ranks failed: \(error.localizedDescription)"
         }
@@ -862,9 +916,57 @@ final class PCBridgeClient: ObservableObject {
             }
 
             favoriteFriendStatuses = statuses
+            saveCachedSnapshot()
         } catch {
             // Online status is lightweight decoration; keep the last known state on failure.
         }
+    }
+
+    private func checkHealth() async throws {
+        let healthURL = baseURL.appending(path: "health")
+        let _: BridgeHealth = try await fetchJSON(from: healthURL, timeout: 2)
+        isServerOnline = true
+    }
+
+    private func loadCachedSnapshot() {
+        guard let data = UserDefaults.standard.data(forKey: cacheKey),
+              let snapshot = try? JSONDecoder().decode(BridgeCachedSnapshot.self, from: data) else {
+            return
+        }
+
+        player = snapshot.player
+        wallet = snapshot.wallet
+        storefront = snapshot.storefront
+        loadout = snapshot.loadout
+        friends = snapshot.friends
+        favoriteFriendRanks = snapshot.favoriteFriendRanks
+        favoriteFriendRankErrors = snapshot.favoriteFriendRankErrors
+        favoriteFriendStatuses = snapshot.favoriteFriendStatuses
+        lastFetchedAt = snapshot.fetchedAt
+
+        if let puuid = snapshot.player?.puuid {
+            loadFavoriteFriendIDs(for: puuid)
+        }
+    }
+
+    private func saveCachedSnapshot() {
+        let snapshot = BridgeCachedSnapshot(
+            fetchedAt: lastFetchedAt ?? Date(),
+            player: player,
+            wallet: wallet,
+            storefront: storefront,
+            loadout: loadout,
+            friends: friends,
+            favoriteFriendRanks: favoriteFriendRanks,
+            favoriteFriendRankErrors: favoriteFriendRankErrors,
+            favoriteFriendStatuses: favoriteFriendStatuses
+        )
+
+        guard let data = try? JSONEncoder().encode(snapshot) else {
+            return
+        }
+
+        UserDefaults.standard.set(data, forKey: cacheKey)
     }
 
     private func loadFavoriteFriendIDs(for puuid: String) {
@@ -884,8 +986,9 @@ final class PCBridgeClient: ObservableObject {
         "\(favoriteFriendIDsKeyPrefix).\(puuid)"
     }
 
-    private func fetchJSON<T: Decodable>(from url: URL) async throws -> T {
-        let (data, response) = try await URLSession.shared.data(from: url)
+    private func fetchJSON<T: Decodable>(from url: URL, timeout: TimeInterval = 15) async throws -> T {
+        let request = URLRequest(url: url, timeoutInterval: timeout)
+        let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw BridgeError.invalidResponse
@@ -900,14 +1003,30 @@ final class PCBridgeClient: ObservableObject {
     }
 }
 
-struct BridgePlayer: Decodable {
+struct BridgeHealth: Decodable {
+    let ok: Bool
+}
+
+struct BridgeCachedSnapshot: Codable {
+    let fetchedAt: Date
+    let player: BridgePlayer?
+    let wallet: BridgeWallet?
+    let storefront: BridgeStorefront?
+    let loadout: BridgeLoadout?
+    let friends: BridgeFriends?
+    let favoriteFriendRanks: [String: BridgeFriendMMR]
+    let favoriteFriendRankErrors: [String: String]
+    let favoriteFriendStatuses: [String: BridgeFriendStatus]
+}
+
+struct BridgePlayer: Codable {
     let gameName: String
     let tagLine: String
     let puuid: String
     let level: Int
 }
 
-struct BridgeWallet: Decodable {
+struct BridgeWallet: Codable {
     let balances: [String: Int]
 
     private enum CodingKeys: String, CodingKey {
@@ -946,7 +1065,7 @@ struct BridgeWalletItem: Identifiable {
     let amount: Int
 }
 
-struct BridgeStorefront: Decodable {
+struct BridgeStorefront: Codable {
     let offers: [BridgeStorefrontOffer]
     let durationRemainingInSeconds: Int
 
@@ -957,7 +1076,7 @@ struct BridgeStorefront: Decodable {
     }
 }
 
-struct BridgeStorefrontOffer: Decodable, Identifiable {
+struct BridgeStorefrontOffer: Codable, Identifiable {
     let offerID: String
     let itemID: String
     let name: String
@@ -982,7 +1101,7 @@ struct BridgeStorefrontOffer: Decodable, Identifiable {
     }
 }
 
-struct BridgeLoadout: Decodable {
+struct BridgeLoadout: Codable {
     let subject: String
     let guns: [BridgeLoadoutGun]
     let identity: BridgeLoadoutIdentity?
@@ -1026,7 +1145,7 @@ struct BridgeLoadout: Decodable {
     }
 }
 
-struct BridgeLoadoutGun: Decodable, Identifiable {
+struct BridgeLoadoutGun: Codable, Identifiable {
     let id: String
     let weaponName: String
     let skinName: String
@@ -1052,7 +1171,7 @@ struct BridgeLoadoutGun: Decodable, Identifiable {
     }
 }
 
-struct BridgeLoadoutIdentity: Decodable {
+struct BridgeLoadoutIdentity: Codable {
     let playerCardID: String?
     let playerTitleID: String?
     let accountLevel: Int
@@ -1073,11 +1192,11 @@ struct BridgeLoadoutSection: Identifiable {
     }
 }
 
-struct BridgeFriends: Decodable {
+struct BridgeFriends: Codable {
     let friends: [BridgeFriend]
 }
 
-struct BridgeFriend: Decodable, Identifiable {
+struct BridgeFriend: Codable, Identifiable {
     let puuid: String
     let gameName: String
     let tagLine: String
@@ -1103,14 +1222,14 @@ struct BridgeFriendStatusesResponse: Decodable {
     let statuses: [BridgeFriendStatus]
 }
 
-struct BridgeFriendStatus: Decodable {
+struct BridgeFriendStatus: Codable {
     let puuid: String
     let isOnline: Bool
     let availability: String
     let product: String
 }
 
-struct BridgeFriendMMR: Decodable {
+struct BridgeFriendMMR: Codable {
     let subject: String?
     let competitiveTier: Int
     let rankedRating: Int
