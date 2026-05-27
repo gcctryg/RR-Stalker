@@ -470,26 +470,53 @@ struct InfoRow: View {
 
 struct ShopOfferRow: View {
     let offer: BridgeStorefrontOffer
+    @State private var isRevealed = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: offer.iconURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                default:
-                    Image(systemName: "questionmark.square.dashed")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.secondary)
+        Button {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                isRevealed.toggle()
+            }
+        } label: {
+            ZStack {
+                if isRevealed {
+                    revealedContent
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.92).combined(with: .opacity),
+                            removal: .scale(scale: 1.04).combined(with: .opacity)
+                        ))
+                } else {
+                    hiddenContent
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.96).combined(with: .opacity),
+                            removal: .scale(scale: 0.92).combined(with: .opacity)
+                        ))
                 }
             }
-            .frame(width: 86, height: 58)
+        }
+        .buttonStyle(.plain)
+        .padding()
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(cardBackgroundColor)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(cardBorderColor, lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel(isRevealed ? "\(offer.name), \(offer.price) VP" : "Hidden shop offer")
+        .accessibilityHint(isRevealed ? "Tap to hide this offer" : "Tap to reveal this offer")
+    }
+
+    private var revealedContent: some View {
+        HStack(spacing: 12) {
+            ShopOfferImage(iconURL: offer.iconURL)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(offer.name)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
 
                 Text("\(offer.price) VP")
@@ -498,9 +525,99 @@ struct ShopOfferRow: View {
             }
 
             Spacer()
+
+            Image(systemName: "eye.slash")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .frame(minHeight: 58)
+    }
+
+    private var hiddenContent: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(tierColor.opacity(0.24))
+
+                if let tierIconURL = offer.contentTierIconURL {
+                    AsyncImage(url: tierIconURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        default:
+                            Image(systemName: "questionmark")
+                                .font(.title2.weight(.semibold))
+                                .foregroundStyle(tierColor)
+                        }
+                    }
+                    .frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: "questionmark")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(tierColor)
+                }
+            }
+            .frame(width: 86, height: 58)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(offer.contentTierName ?? "Hidden Offer")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Text("Tap to reveal")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "eye")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(minHeight: 58)
+    }
+
+    private var tierColor: Color {
+        offer.contentTierColorValue ?? .secondary
+    }
+
+    private var cardBackgroundColor: Color {
+        if isRevealed {
+            return .secondary.opacity(0.08)
+        }
+
+        return tierColor.opacity(0.22)
+    }
+
+    private var cardBorderColor: Color {
+        if isRevealed {
+            return .secondary.opacity(0.18)
+        }
+
+        return tierColor.opacity(0.42)
+    }
+}
+
+struct ShopOfferImage: View {
+    let iconURL: URL?
+
+    var body: some View {
+        AsyncImage(url: iconURL) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFit()
+            default:
+                Image(systemName: "questionmark.square.dashed")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 86, height: 58)
     }
 }
 
@@ -847,9 +964,21 @@ struct BridgeStorefrontOffer: Decodable, Identifiable {
     let iconURL: URL?
     let price: Int
     let currencyID: String
+    let contentTierUUID: String?
+    let contentTierName: String?
+    let contentTierColor: String?
+    let contentTierIconURL: URL?
 
     var id: String {
         offerID
+    }
+
+    var contentTierColorValue: Color? {
+        guard let contentTierColor else {
+            return nil
+        }
+
+        return Color(hex: contentTierColor)
     }
 }
 
@@ -1015,6 +1144,37 @@ struct BridgeFriendMMR: Decodable {
         hasRank = (try container.decodeIfPresent(Bool.self, forKey: .hasRank)) ?? (competitiveTier > 0)
         rankName = try container.decodeIfPresent(String.self, forKey: .rankName) ?? (competitiveTier > 0 ? "Tier \(competitiveTier)" : "Unrated")
         rankIconURL = try container.decodeIfPresent(URL.self, forKey: .rankIconURL)
+    }
+}
+
+extension Color {
+    init?(hex: String) {
+        let trimmedHex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard let value = UInt64(trimmedHex, radix: 16) else {
+            return nil
+        }
+
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+
+        switch trimmedHex.count {
+        case 6:
+            red = Double((value & 0xFF0000) >> 16) / 255
+            green = Double((value & 0x00FF00) >> 8) / 255
+            blue = Double(value & 0x0000FF) / 255
+            alpha = 1
+        case 8:
+            red = Double((value & 0xFF000000) >> 24) / 255
+            green = Double((value & 0x00FF0000) >> 16) / 255
+            blue = Double((value & 0x0000FF00) >> 8) / 255
+            alpha = Double(value & 0x000000FF) / 255
+        default:
+            return nil
+        }
+
+        self = Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }
 }
 

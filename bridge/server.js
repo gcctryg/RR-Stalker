@@ -614,7 +614,10 @@ function getMockStorefront() {
         name: "Mock Vandal Skin",
         iconURL: null,
         price: 1775,
-        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741",
+        contentTierName: "Premium Edition",
+        contentTierColor: "d1548d33",
+        contentTierIconURL: "https://media.valorant-api.com/contenttiers/60bca009-4182-7998-dee7-b8a2558dc369/displayicon.png"
       },
       {
         offerID: "mock-offer-2",
@@ -622,7 +625,10 @@ function getMockStorefront() {
         name: "Mock Phantom Skin",
         iconURL: null,
         price: 1775,
-        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741",
+        contentTierName: "Deluxe Edition",
+        contentTierColor: "00958733",
+        contentTierIconURL: "https://media.valorant-api.com/contenttiers/0cebb8be-46d7-c12a-d306-e9907bfc5a25/displayicon.png"
       },
       {
         offerID: "mock-offer-3",
@@ -630,7 +636,10 @@ function getMockStorefront() {
         name: "Mock Sheriff Skin",
         iconURL: null,
         price: 1275,
-        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741",
+        contentTierName: "Select Edition",
+        contentTierColor: "5a9fe233",
+        contentTierIconURL: "https://media.valorant-api.com/contenttiers/12683d76-48d7-84a3-4e09-6985794f0445/displayicon.png"
       },
       {
         offerID: "mock-offer-4",
@@ -638,7 +647,10 @@ function getMockStorefront() {
         name: "Mock Operator Skin",
         iconURL: null,
         price: 2175,
-        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+        currencyID: "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741",
+        contentTierName: "Ultra Edition",
+        contentTierColor: "fad66333",
+        contentTierIconURL: "https://media.valorant-api.com/contenttiers/411e4a55-4e59-7757-41f0-86a53f101bb5/displayicon.png"
       }
     ],
     durationRemainingInSeconds: 3600,
@@ -745,6 +757,10 @@ const competitiveTierCache = {
   loadedAt: 0,
   tiers: new Map()
 };
+const contentTierCache = {
+  loadedAt: 0,
+  tiersByID: new Map()
+};
 
 async function fetchSkinLevel(itemID) {
   if (skinLevelCache.has(itemID)) {
@@ -793,7 +809,10 @@ async function fetchWeaponAssets() {
       skinsByID.set(skin.uuid, skin);
 
       for (const level of skin.levels || []) {
-        skinLevelsByID.set(level.uuid, level);
+        skinLevelsByID.set(level.uuid, {
+          ...level,
+          skinContentTierUuid: skin.contentTierUuid || null
+        });
       }
 
       for (const chroma of skin.chromas || []) {
@@ -875,6 +894,30 @@ async function fetchCompetitiveTierAssets() {
   competitiveTierCache.loadedAt = Date.now();
   competitiveTierCache.tiers = tiers;
   return tiers;
+}
+
+async function fetchContentTierAssets() {
+  if (Date.now() - contentTierCache.loadedAt < 3600000 && contentTierCache.tiersByID.size > 0) {
+    return contentTierCache.tiersByID;
+  }
+
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/contenttiers", "contenttiers");
+  if (!body) {
+    return contentTierCache.tiersByID;
+  }
+
+  const tiersByID = new Map();
+  for (const tier of body.data || []) {
+    tiersByID.set(tier.uuid, {
+      name: tier.displayName || tier.devName || "",
+      color: tier.highlightColor || null,
+      iconURL: tier.displayIcon || null
+    });
+  }
+
+  contentTierCache.loadedAt = Date.now();
+  contentTierCache.tiersByID = tiersByID;
+  return tiersByID;
 }
 
 function formatRankName(rankName) {
@@ -1003,11 +1046,14 @@ async function fetchStorefront(puuid, shard) {
   });
   const layout = storefront.SkinsPanelLayout || {};
   const offers = layout.SingleItemStoreOffers || [];
+  const contentTiers = await fetchContentTierAssets();
   const enrichedOffers = await Promise.all(offers.slice(0, 4).map(async (offer) => {
     const reward = (offer.Rewards || [])[0] || {};
     const costEntries = Object.entries(offer.Cost || {});
     const [currencyID, price] = costEntries[0] || ["", 0];
     const skinLevel = reward.ItemID ? await fetchSkinLevel(reward.ItemID) : null;
+    const contentTierUUID = skinLevel?.skinContentTierUuid || skinLevel?.contentTierUuid || null;
+    const contentTier = contentTierUUID ? contentTiers.get(contentTierUUID) : null;
 
     return {
       offerID: offer.OfferID,
@@ -1015,7 +1061,11 @@ async function fetchStorefront(puuid, shard) {
       name: skinLevel?.displayName || reward.ItemID || offer.OfferID,
       iconURL: skinLevel?.displayIcon || null,
       price,
-      currencyID
+      currencyID,
+      contentTierUUID,
+      contentTierName: contentTier?.name || null,
+      contentTierColor: contentTier?.color || null,
+      contentTierIconURL: contentTier?.iconURL || null
     };
   }));
 
