@@ -342,6 +342,137 @@ function normalizeFriendsBody(body) {
     .filter((friend) => friend.puuid || friend.gameName !== "Unknown" || friend.tagLine);
 }
 
+function decodePresencePrivate(privateValue) {
+  if (!privateValue || typeof privateValue !== "string") {
+    return null;
+  }
+
+  try {
+    return JSON.parse(Buffer.from(privateValue, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function findPlayerCardID(value) {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  for (const [key, childValue] of Object.entries(value)) {
+    if (/player.?card/i.test(key) && typeof childValue === "string") {
+      return childValue;
+    }
+
+    const nestedValue = findPlayerCardID(childValue);
+    if (nestedValue) {
+      return nestedValue;
+    }
+  }
+
+  return "";
+}
+
+async function fetchLocalPresences() {
+  if (!riotClientPort && !valorantRemotingPort) {
+    const error = new Error("Start the bridge with start-bridge.ps1 to load Riot presences.");
+    error.statusCode = 503;
+    error.code = "missing_local_riot_credentials";
+    throw error;
+  }
+
+  const sources = [];
+
+  if (riotClientPort && riotClientPassword) {
+    sources.push({
+      name: "riot-client",
+      port: riotClientPort,
+      headers: getLocalRiotAuthHeaders()
+    });
+  }
+
+  if (valorantRemotingPort && valorantRemotingAuthToken) {
+    sources.push({
+      name: "valorant-remoting",
+      port: valorantRemotingPort,
+      headers: getValorantLocalAuthHeaders()
+    });
+  }
+
+  const attempts = [];
+
+  for (const source of sources) {
+    try {
+      const body = await requestLocalRiotJSON(
+        `https://127.0.0.1:${source.port}/chat/v4/presences`,
+        source.headers,
+        "riot_presence_failed"
+      );
+
+      return {
+        presences: body.presences || [],
+        source: source.name
+      };
+    } catch (error) {
+      attempts.push({
+        source: source.name,
+        path: "/chat/v4/presences",
+        error: error.body || error.message
+      });
+    }
+  }
+
+  const error = new Error("Riot local presence endpoint was not available.");
+  error.statusCode = 502;
+  error.code = "riot_presence_unavailable";
+  error.body = { attempts };
+  throw error;
+}
+
+async function fetchFriendsCards(puuids) {
+  const uniquePUUIDs = [...new Set(puuids.map((puuid) => puuid.trim()).filter(Boolean))];
+
+  if (useMocks) {
+    return {
+      cards: uniquePUUIDs.map((puuid) => ({
+        puuid,
+        playerCardID: "mock-card",
+        displayName: "Mock Card",
+        displayIcon: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/displayicon.png",
+        smallArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/smallart.png",
+        wideArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/wideart.png",
+        largeArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/largeart.png"
+      })),
+      source: "mock"
+    };
+  }
+
+  const { presences, source } = await fetchLocalPresences();
+  const requestedPUUIDs = new Set(uniquePUUIDs);
+  const cards = await Promise.all(presences
+    .filter((presence) => requestedPUUIDs.has(presence.puuid))
+    .map(async (presence) => {
+      const privatePresence = decodePresencePrivate(presence.private);
+      const playerCardID = findPlayerCardID(privatePresence);
+      const card = await fetchPlayerCard(playerCardID);
+
+      return {
+        puuid: presence.puuid,
+        playerCardID,
+        displayName: card?.displayName || "",
+        displayIcon: card?.displayIcon || null,
+        smallArt: card?.smallArt || null,
+        wideArt: card?.wideArt || null,
+        largeArt: card?.largeArt || null
+      };
+    }));
+
+  return {
+    cards: cards.filter((card) => card.playerCardID),
+    source
+  };
+}
+
 async function fetchFriends() {
   if (useMocks) {
     return getMockFriends();
@@ -610,6 +741,7 @@ function getRiotHeaders() {
 const skinLevelCache = new Map();
 const skinChromaCache = new Map();
 const skinCache = new Map();
+const playerCardCache = new Map();
 const weaponAssetCache = {
   loadedAt: 0,
   weaponsByID: new Map(),
@@ -716,6 +848,24 @@ function getSkinByID(skinID) {
 
 function firstURL(...urls) {
   return urls.find((url) => typeof url === "string" && url.length > 0) || null;
+}
+
+async function fetchPlayerCard(cardID) {
+  if (!cardID) {
+    return null;
+  }
+
+  if (playerCardCache.has(cardID)) {
+    return playerCardCache.get(cardID);
+  }
+
+  const body = await fetchValorantAPIJSON(
+    `https://valorant-api.com/v1/playercards/${encodeURIComponent(cardID)}`,
+    `playercard-${cardID}`
+  );
+  const card = body?.data || null;
+  playerCardCache.set(cardID, card);
+  return card;
 }
 
 function normalizeWeaponCategory(category) {
@@ -1266,6 +1416,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (requestURL.pathname === "/friends/cards") {
+    try {
+      const puuids = (requestURL.searchParams.get("puuids") || "").split(",");
+      const result = await fetchFriendsCards(puuids);
+      sendJSON(res, 200, result);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "friends_cards_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (pathParts[0] === "mmr" && pathParts[1]) {
     try {
       const shard = requestURL.searchParams.get("shard") || valorantShard;
@@ -1296,6 +1461,7 @@ const server = http.createServer(async (req, res) => {
       "GET /loadout/:puuid",
       "GET /friends",
       "GET /friends/mmr?puuids=:puuid,:puuid",
+      "GET /friends/cards?puuids=:puuid,:puuid",
       "GET /friends/first-mmr",
       "GET /mmr/:puuid",
       "GET /parties/:partyID/queues"

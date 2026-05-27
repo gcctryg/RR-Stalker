@@ -274,6 +274,7 @@ struct FriendFavoritePicker: View {
                     Button("Confirm") {
                         Task {
                             await bridge.loadFavoriteFriendRanks()
+                            await bridge.loadFavoriteFriendCards()
                             dismiss()
                         }
                     }
@@ -329,9 +330,37 @@ struct FriendRow: View {
                     .textSelection(.enabled)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            FriendCardBackground(card: friend.playerCard)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct FriendCardBackground: View {
+    let card: BridgeFriendCard?
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.thinMaterial)
+
+            if let cardURL = card?.backgroundURL {
+                AsyncImage(url: cardURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                            .overlay(.black.opacity(0.42))
+                    default:
+                        Color.clear
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -551,6 +580,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var favoriteFriendIDs: Set<String>
     @Published var favoriteFriendRanks: [String: BridgeFriendMMR] = [:]
     @Published var favoriteFriendRankErrors: [String: String] = [:]
+    @Published var favoriteFriendCards: [String: BridgeFriendCard] = [:]
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
@@ -576,6 +606,7 @@ final class PCBridgeClient: ObservableObject {
                 var favorite = friend
                 favorite.mmr = favoriteFriendRanks[friend.puuid]
                 favorite.mmrError = favoriteFriendRankErrors[friend.puuid]
+                favorite.playerCard = favoriteFriendCards[friend.puuid]
                 return favorite
             }
     }
@@ -597,6 +628,7 @@ final class PCBridgeClient: ObservableObject {
             if previousPlayerPUUID != loadedPlayer.puuid {
                 favoriteFriendRanks = [:]
                 favoriteFriendRankErrors = [:]
+                favoriteFriendCards = [:]
             }
 
             let walletURL = baseURL
@@ -633,6 +665,7 @@ final class PCBridgeClient: ObservableObject {
             do {
                 friends = try await fetchJSON(from: friendsURL)
                 await loadFavoriteFriendRanks()
+                await loadFavoriteFriendCards()
             } catch {
                 friends = nil
                 friendsErrorMessage = "Player loaded, but friends failed: \(error.localizedDescription)"
@@ -649,6 +682,7 @@ final class PCBridgeClient: ObservableObject {
             favoriteFriendIDs.remove(friend.puuid)
             favoriteFriendRanks.removeValue(forKey: friend.puuid)
             favoriteFriendRankErrors.removeValue(forKey: friend.puuid)
+            favoriteFriendCards.removeValue(forKey: friend.puuid)
         } else {
             favoriteFriendIDs.insert(friend.puuid)
         }
@@ -662,6 +696,7 @@ final class PCBridgeClient: ObservableObject {
         guard !favoriteFriendIDs.isEmpty else {
             favoriteFriendRanks = [:]
             favoriteFriendRankErrors = [:]
+            favoriteFriendCards = [:]
             return
         }
 
@@ -697,6 +732,39 @@ final class PCBridgeClient: ObservableObject {
             favoriteFriendRankErrors = errors
         } catch {
             friendsErrorMessage = "Favorite ranks failed: \(error.localizedDescription)"
+        }
+    }
+
+    func loadFavoriteFriendCards() async {
+        guard !favoriteFriendIDs.isEmpty else {
+            favoriteFriendCards = [:]
+            return
+        }
+
+        do {
+            let joinedIDs = favoriteFriendIDs.joined(separator: ",")
+            var components = URLComponents(
+                url: baseURL.appending(path: "friends/cards"),
+                resolvingAgainstBaseURL: false
+            )
+            components?.queryItems = [
+                URLQueryItem(name: "puuids", value: joinedIDs)
+            ]
+
+            guard let url = components?.url else {
+                throw BridgeError.invalidResponse
+            }
+
+            let cardResponse: BridgeFriendCardsResponse = try await fetchJSON(from: url)
+            var cards = favoriteFriendCards.filter { favoriteFriendIDs.contains($0.key) }
+
+            for card in cardResponse.cards {
+                cards[card.puuid] = card
+            }
+
+            favoriteFriendCards = cards
+        } catch {
+            // Friend cards are decorative, so keep the last good cards and avoid noisy UI errors.
         }
     }
 
@@ -905,6 +973,7 @@ struct BridgeFriend: Decodable, Identifiable {
     var mmr: BridgeFriendMMR?
     var mmrError: String?
     var mmrErrorStatus: Int?
+    var playerCard: BridgeFriendCard?
 
     var id: String {
         puuid
@@ -916,6 +985,24 @@ struct BridgeFriend: Decodable, Identifiable {
         }
 
         return "Rank unavailable"
+    }
+}
+
+struct BridgeFriendCardsResponse: Decodable {
+    let cards: [BridgeFriendCard]
+}
+
+struct BridgeFriendCard: Decodable {
+    let puuid: String
+    let playerCardID: String
+    let displayName: String
+    let displayIcon: URL?
+    let smallArt: URL?
+    let wideArt: URL?
+    let largeArt: URL?
+
+    var backgroundURL: URL? {
+        wideArt ?? largeArt ?? smallArt ?? displayIcon
     }
 }
 
