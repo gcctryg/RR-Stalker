@@ -185,7 +185,7 @@ struct FriendRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if friend.mmrError != nil {
-                Text("Rank unavailable")
+                Text(friend.rankUnavailableText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -458,9 +458,18 @@ struct BridgeFriend: Decodable, Identifiable {
     let tagLine: String
     let mmr: BridgeFriendMMR?
     let mmrError: String?
+    let mmrErrorStatus: Int?
 
     var id: String {
         puuid
+    }
+
+    var rankUnavailableText: String {
+        if let mmrErrorStatus {
+            return "Rank unavailable (HTTP \(mmrErrorStatus))"
+        }
+
+        return "Rank unavailable"
     }
 }
 
