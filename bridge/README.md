@@ -10,6 +10,18 @@ On Windows, start Riot Client and log in, then run:
 .\start-bridge.ps1 -Shard na
 ```
 
+For development, install dependencies once:
+
+```powershell
+npm install
+```
+
+Then keep the bridge running with auto-restart on bridge file changes:
+
+```powershell
+npm run watch
+```
+
 The script reads the Riot Client lockfile, fetches fresh access and entitlements
 tokens from the local client, sets the bridge environment variables, and starts
 the bridge. It also passes your token subject as `VALORANT_PUUID`, so `/player`

@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./start-bridge.ps1 -Shard na",
+    "watch": "nodemon --config nodemon.json"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

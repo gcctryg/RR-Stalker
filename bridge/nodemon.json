@@ -1,0 +1,10 @@
+{
+  "watch": [
+    "server.js",
+    "riot-auth.js",
+    "start-bridge.ps1"
+  ],
+  "ext": "js,ps1",
+  "delay": "2",
+  "exec": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./start-bridge.ps1 -Shard na"
+}
