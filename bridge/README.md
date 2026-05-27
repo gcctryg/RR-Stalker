@@ -84,6 +84,7 @@ curl http://localhost:3000/health
 curl http://localhost:3000/player
 curl http://localhost:3000/wallet/mock-puuid
 curl http://localhost:3000/storefront/mock-puuid
+curl http://localhost:3000/loadout/mock-puuid
 curl http://localhost:3000/friends
 curl "http://localhost:3000/friends/mmr?puuids=mock-puuid"
 curl http://localhost:3000/friends/first-mmr
@@ -143,6 +144,21 @@ GET /storefront/:puuid
 ```
 
 The bridge sends Riot a `POST` request with an empty JSON object body.
+
+The private endpoint:
+
+```text
+https://pd.{shard}.a.pvp.net/personalization/v2/players/{puuid}/playerloadout
+```
+
+maps to this local bridge route:
+
+```text
+GET /loadout/:puuid
+```
+
+The bridge enriches equipped weapons with public weapon and skin assets from
+Valorant-API so the iOS app can display the current loadout with images.
 
 The private endpoint:
 

@@ -484,6 +484,51 @@ function getMockStorefront() {
   };
 }
 
+function getMockLoadout(puuid) {
+  return {
+    subject: puuid,
+    guns: [
+      {
+        id: "mock-vandal",
+        weaponName: "Vandal",
+        skinName: "Prime Vandal",
+        displayName: "Prime Vandal",
+        iconURL: "https://media.valorant-api.com/weaponskins/9f8688b6-4c1f-1140-bcfd-6babb8156fe8/displayicon.png",
+        category: "Rifles",
+        skinID: "mock-prime-vandal",
+        skinLevelID: "mock-prime-vandal-level",
+        chromaID: "mock-prime-vandal-chroma"
+      },
+      {
+        id: "mock-phantom",
+        weaponName: "Phantom",
+        skinName: "Oni Phantom",
+        displayName: "Oni Phantom",
+        iconURL: "https://media.valorant-api.com/weaponskins/da48adf0-4b7c-9b2d-6ea0-2a80f8d4fbb5/displayicon.png",
+        category: "Rifles",
+        skinID: "mock-oni-phantom",
+        skinLevelID: "mock-oni-phantom-level",
+        chromaID: "mock-oni-phantom-chroma"
+      },
+      {
+        id: "mock-classic",
+        weaponName: "Classic",
+        skinName: "Classic",
+        displayName: "Classic",
+        iconURL: "https://media.valorant-api.com/weapons/29a0cfab-485b-f5d5-779a-b59f85e204a8/displayicon.png",
+        category: "Sidearms",
+        skinID: "mock-classic",
+        skinLevelID: "mock-classic-level",
+        chromaID: "mock-classic-chroma"
+      }
+    ],
+    identity: {
+      accountLevel: 111,
+      hideAccountLevel: false
+    }
+  };
+}
+
 function isValidShard(shard) {
   return /^[a-z0-9-]+$/i.test(shard);
 }
@@ -525,6 +570,7 @@ function getRiotHeaders() {
 }
 
 const skinLevelCache = new Map();
+let weaponsCache = null;
 const competitiveTierCache = {
   loadedAt: 0,
   tiers: new Map()
@@ -544,6 +590,30 @@ async function fetchSkinLevel(itemID) {
   const skinLevel = body.data || null;
   skinLevelCache.set(itemID, skinLevel);
   return skinLevel;
+}
+
+async function fetchWeaponsByID() {
+  if (weaponsCache) {
+    return weaponsCache;
+  }
+
+  const response = await fetch("https://valorant-api.com/v1/weapons");
+  if (!response.ok) {
+    weaponsCache = new Map();
+    return weaponsCache;
+  }
+
+  const body = await response.json();
+  weaponsCache = new Map((body.data || []).map((weapon) => [weapon.uuid, weapon]));
+  return weaponsCache;
+}
+
+function normalizeWeaponCategory(category) {
+  const rawCategory = (category || "").split("::").at(-1) || "Weapons";
+  return rawCategory
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 async function fetchCompetitiveTierAssets() {
@@ -719,6 +789,83 @@ async function fetchStorefront(puuid, shard) {
   return {
     offers: enrichedOffers,
     durationRemainingInSeconds: layout.SingleItemOffersRemainingDurationInSeconds || 0
+  };
+}
+
+async function fetchPlayerLoadout(puuid, shard) {
+  if (useMocks) {
+    return getMockLoadout(puuid);
+  }
+
+  await refreshAuthState();
+
+  if (!shard) {
+    const error = new Error("Set VALORANT_SHARD or pass ?shard=na to use player loadout.");
+    error.statusCode = 400;
+    error.code = "missing_shard";
+    throw error;
+  }
+
+  if (!isValidShard(shard)) {
+    const error = new Error("Shard may only contain letters, numbers, and hyphens.");
+    error.statusCode = 400;
+    error.code = "invalid_shard";
+    throw error;
+  }
+
+  if (!authState.accessToken || !authState.entitlementsToken) {
+    const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
+    error.statusCode = 503;
+    error.code = "missing_riot_credentials";
+    throw error;
+  }
+
+  requireMatchingPUUID(puuid);
+
+  const [loadout, weaponsByID] = await Promise.all([
+    fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
+      errorMessage: "Riot player loadout request failed.",
+      errorCode: "riot_player_loadout_failed"
+    }),
+    fetchWeaponsByID()
+  ]);
+
+  const guns = await Promise.all((loadout.Guns || []).map(async (gun) => {
+    const weapon = weaponsByID.get(gun.ID) || {};
+    const skinLevel = gun.SkinLevelID ? await fetchSkinLevel(gun.SkinLevelID) : null;
+    const skinName = skinLevel?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
+
+    return {
+      id: gun.ID,
+      weaponName: weapon.displayName || gun.ID,
+      skinName,
+      displayName: skinName,
+      iconURL: skinLevel?.displayIcon || weapon.displayIcon || null,
+      category: normalizeWeaponCategory(weapon.category),
+      skinID: gun.SkinID,
+      skinLevelID: gun.SkinLevelID,
+      chromaID: gun.ChromaID,
+      charmID: gun.CharmID || null
+    };
+  }));
+
+  return {
+    subject: loadout.Subject,
+    guns: guns.sort((a, b) => {
+      if (a.category === b.category) {
+        return a.weaponName.localeCompare(b.weaponName);
+      }
+
+      return a.category.localeCompare(b.category);
+    }),
+    identity: {
+      playerCardID: loadout.Identity?.PlayerCardID || "",
+      playerTitleID: loadout.Identity?.PlayerTitleID || "",
+      accountLevel: loadout.Identity?.AccountLevel || 0,
+      preferredLevelBorderID: loadout.Identity?.PreferredLevelBorderID || "",
+      hideAccountLevel: Boolean(loadout.Identity?.HideAccountLevel)
+    },
+    incognito: Boolean(loadout.Incognito)
   };
 }
 
@@ -942,6 +1089,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathParts[0] === "loadout" && pathParts[1]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const loadout = await fetchPlayerLoadout(pathParts[1], shard);
+      sendJSON(res, 200, loadout);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "loadout_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (requestURL.pathname === "/friends/first-mmr") {
     try {
       const shard = requestURL.searchParams.get("shard") || valorantShard;
@@ -1014,6 +1176,7 @@ const server = http.createServer(async (req, res) => {
       "GET /player",
       "GET /wallet/:puuid",
       "GET /storefront/:puuid",
+      "GET /loadout/:puuid",
       "GET /friends",
       "GET /friends/mmr?puuids=:puuid,:puuid",
       "GET /friends/first-mmr",

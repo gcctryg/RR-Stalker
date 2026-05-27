@@ -13,9 +13,9 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            CurrentPlayerView(bridge: bridge)
+            LoadoutView(bridge: bridge)
                 .tabItem {
-                    Label("Current Player", systemImage: "person.crop.circle")
+                    Label("Loadout", systemImage: "scope")
                 }
 
             FriendListView(bridge: bridge)
@@ -23,15 +23,65 @@ struct ContentView: View {
                     Label("Friends", systemImage: "person.2")
                 }
 
-            SettingsView()
+            ProfileView(bridge: bridge)
                 .tabItem {
-                    Label("Settings", systemImage: "gearshape")
+                    Label("Profile", systemImage: "person.crop.circle")
                 }
+        }
+        .task {
+            await bridge.loadPlayer()
         }
     }
 }
 
-struct CurrentPlayerView: View {
+struct LoadoutView: View {
+    @ObservedObject var bridge: PCBridgeClient
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HeaderBanner(bridge: bridge)
+
+                Text("Loadout")
+                    .font(.largeTitle.bold())
+
+                if let loadout = bridge.loadout, !loadout.guns.isEmpty {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)
+                        ],
+                        spacing: 12
+                    ) {
+                        ForEach(loadout.guns) { gun in
+                            LoadoutWeaponCard(gun: gun)
+                        }
+                    }
+                } else if bridge.isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 30)
+                } else {
+                    ContentUnavailableView(
+                        "No Loadout",
+                        systemImage: "scope",
+                        description: Text("Refresh profile data to load your equipped weapons.")
+                    )
+                }
+
+                if let loadoutErrorMessage = bridge.loadoutErrorMessage {
+                    Text(loadoutErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+struct ProfileView: View {
     @ObservedObject var bridge: PCBridgeClient
 
     var body: some View {
@@ -317,12 +367,22 @@ struct RankIconView: View {
 
 struct SettingsView: View {
     var body: some View {
-        Text("")
+        NavigationStack {
+            List {
+                Section("Bridge") {
+                    Text("Update the PC bridge URL in ContentView.swift when your PC IP changes.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Settings")
+        }
     }
 }
 
 struct HeaderBanner: View {
     @ObservedObject var bridge: PCBridgeClient
+    @State private var isShowingSettings = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -339,6 +399,16 @@ struct HeaderBanner: View {
             }
 
             Spacer(minLength: 12)
+
+            Button {
+                isShowingSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Settings")
 
             Button {
                 Task {
@@ -365,6 +435,9 @@ struct HeaderBanner: View {
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsView()
+        }
     }
 }
 
@@ -420,6 +493,52 @@ struct ShopOfferRow: View {
     }
 }
 
+struct LoadoutWeaponCard: View {
+    let gun: BridgeLoadoutGun
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack {
+                AsyncImage(url: gun.iconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    default:
+                        Image(systemName: "scope")
+                            .font(.system(size: 38, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(8)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 96)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(gun.weaponName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(gun.skinName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+
+                Text(gun.category)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 @MainActor
 final class PCBridgeClient: ObservableObject {
     private let favoriteFriendIDsKeyPrefix = "favoriteFriendIDs"
@@ -427,6 +546,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
     @Published var storefront: BridgeStorefront?
+    @Published var loadout: BridgeLoadout?
     @Published var friends: BridgeFriends?
     @Published var favoriteFriendIDs: Set<String>
     @Published var favoriteFriendRanks: [String: BridgeFriendMMR] = [:]
@@ -434,6 +554,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
+    @Published var loadoutErrorMessage: String?
     @Published var friendsErrorMessage: String?
     @Published var isLoading = false
 
@@ -464,6 +585,7 @@ final class PCBridgeClient: ObservableObject {
         errorMessage = nil
         walletErrorMessage = nil
         storefrontErrorMessage = nil
+        loadoutErrorMessage = nil
         friendsErrorMessage = nil
 
         do {
@@ -492,6 +614,16 @@ final class PCBridgeClient: ObservableObject {
             } catch {
                 storefront = nil
                 storefrontErrorMessage = "Player loaded, but shop failed: \(error.localizedDescription)"
+            }
+
+            let loadoutURL = baseURL
+                .appending(path: "loadout")
+                .appending(path: loadedPlayer.puuid)
+            do {
+                loadout = try await fetchJSON(from: loadoutURL)
+            } catch {
+                loadout = nil
+                loadoutErrorMessage = "Player loaded, but loadout failed: \(error.localizedDescription)"
             }
 
             let friendsURL = baseURL.appending(path: "friends")
@@ -666,6 +798,33 @@ struct BridgeStorefrontOffer: Decodable, Identifiable {
     var id: String {
         offerID
     }
+}
+
+struct BridgeLoadout: Decodable {
+    let subject: String
+    let guns: [BridgeLoadoutGun]
+    let identity: BridgeLoadoutIdentity?
+}
+
+struct BridgeLoadoutGun: Decodable, Identifiable {
+    let id: String
+    let weaponName: String
+    let skinName: String
+    let displayName: String
+    let iconURL: URL?
+    let category: String
+    let skinID: String
+    let skinLevelID: String
+    let chromaID: String
+    let charmID: String?
+}
+
+struct BridgeLoadoutIdentity: Decodable {
+    let playerCardID: String?
+    let playerTitleID: String?
+    let accountLevel: Int
+    let preferredLevelBorderID: String?
+    let hideAccountLevel: Bool
 }
 
 struct BridgeFriends: Decodable {
