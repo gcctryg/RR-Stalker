@@ -276,12 +276,28 @@ function getMockFriends() {
       {
         puuid: "mock-friend-1",
         gameName: "FriendlyJett",
-        tagLine: "NA1"
+        tagLine: "NA1",
+        mmr: {
+          subject: "mock-friend-1",
+          competitiveTier: 15,
+          rankedRating: 50,
+          leaderboardRank: 0,
+          numberOfWins: 12,
+          seasonID: "mock-season"
+        }
       },
       {
         puuid: "mock-friend-2",
         gameName: "PocketSage",
-        tagLine: "GG"
+        tagLine: "GG",
+        mmr: {
+          subject: "mock-friend-2",
+          competitiveTier: 18,
+          rankedRating: 55,
+          leaderboardRank: 0,
+          numberOfWins: 64,
+          seasonID: "mock-season"
+        }
       }
     ],
     source: "mock"
@@ -423,7 +439,7 @@ async function fetchFriends() {
     throw error;
   }
 
-  const friends = normalizeFriendsBody(body);
+  const friends = await enrichFriendsWithMMR(normalizeFriendsBody(body), valorantShard);
 
   return {
     friends,
@@ -669,6 +685,28 @@ async function fetchStorefront(puuid, shard) {
     offers: enrichedOffers,
     durationRemainingInSeconds: layout.SingleItemOffersRemainingDurationInSeconds || 0
   };
+}
+
+async function enrichFriendsWithMMR(friends, shard) {
+  const results = await Promise.all(friends.map(async (friend) => {
+    if (!friend.puuid) {
+      return friend;
+    }
+
+    try {
+      return {
+        ...friend,
+        mmr: await fetchPlayerMMR(friend.puuid, shard)
+      };
+    } catch (error) {
+      return {
+        ...friend,
+        mmrError: error.code || error.message
+      };
+    }
+  }));
+
+  return results;
 }
 
 function getLatestCompetitiveInfo(mmr) {

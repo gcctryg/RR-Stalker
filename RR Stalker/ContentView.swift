@@ -155,16 +155,36 @@ struct FriendRow: View {
     let friend: BridgeFriend
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(friend.gameName)#\(friend.tagLine)")
-                .font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(friend.gameName)#\(friend.tagLine)")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
 
-            Text(friend.puuid)
-                .font(.caption.monospaced())
+                Spacer()
+
+                if let mmr = friend.mmr {
+                    Text(mmr.rankText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let mmr = friend.mmr {
+                HStack(spacing: 10) {
+                    Text("\(mmr.rankedRating) RR")
+                    Text("\(mmr.numberOfWins) wins")
+                    if mmr.leaderboardRank > 0 {
+                        Text("#\(mmr.leaderboardRank)")
+                    }
+                }
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
+            } else if friend.mmrError != nil {
+                Text("Rank unavailable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -432,9 +452,81 @@ struct BridgeFriend: Decodable, Identifiable {
     let puuid: String
     let gameName: String
     let tagLine: String
+    let mmr: BridgeFriendMMR?
+    let mmrError: String?
 
     var id: String {
         puuid
+    }
+}
+
+struct BridgeFriendMMR: Decodable {
+    let subject: String
+    let competitiveTier: Int
+    let rankedRating: Int
+    let leaderboardRank: Int
+    let numberOfWins: Int
+    let seasonID: String
+
+    var rankText: String {
+        BridgeFriendMMR.rankName(for: competitiveTier)
+    }
+
+    private static func rankName(for tier: Int) -> String {
+        switch tier {
+        case 3:
+            "Iron 1"
+        case 4:
+            "Iron 2"
+        case 5:
+            "Iron 3"
+        case 6:
+            "Bronze 1"
+        case 7:
+            "Bronze 2"
+        case 8:
+            "Bronze 3"
+        case 9:
+            "Silver 1"
+        case 10:
+            "Silver 2"
+        case 11:
+            "Silver 3"
+        case 12:
+            "Gold 1"
+        case 13:
+            "Gold 2"
+        case 14:
+            "Gold 3"
+        case 15:
+            "Platinum 1"
+        case 16:
+            "Platinum 2"
+        case 17:
+            "Platinum 3"
+        case 18:
+            "Diamond 1"
+        case 19:
+            "Diamond 2"
+        case 20:
+            "Diamond 3"
+        case 21:
+            "Ascendant 1"
+        case 22:
+            "Ascendant 2"
+        case 23:
+            "Ascendant 3"
+        case 24:
+            "Immortal 1"
+        case 25:
+            "Immortal 2"
+        case 26:
+            "Immortal 3"
+        case 27:
+            "Radiant"
+        default:
+            tier > 0 ? "Tier \(tier)" : "Unrated"
+        }
     }
 }
 
