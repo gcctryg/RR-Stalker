@@ -92,6 +92,7 @@ $env:VALORANT_ACCESS_TOKEN = $accessToken
 $env:VALORANT_ENTITLEMENTS_TOKEN = $entitlementsToken
 $env:RIOT_CLIENT_PORT = $riotPort
 $env:RIOT_CLIENT_PASSWORD = $riotPassword
+$env:RIOT_LOCKFILE_PATH = $resolvedLockfilePath
 
 if ($tokenResponse.subject) {
     $env:VALORANT_PUUID = $tokenResponse.subject

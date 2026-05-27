@@ -80,6 +80,7 @@ curl http://localhost:3000/health
 curl http://localhost:3000/player
 curl http://localhost:3000/wallet/mock-puuid
 curl http://localhost:3000/storefront/mock-puuid
+curl http://localhost:3000/friends
 curl http://localhost:3000/parties/mock-party-id/queues
 ```
 
@@ -136,6 +137,18 @@ GET /storefront/:puuid
 ```
 
 The bridge sends Riot a `POST` request with an empty JSON object body.
+
+The private endpoint:
+
+```text
+https://127.0.0.1:{port}/chat/v4/friends
+```
+
+maps to this local bridge route:
+
+```text
+GET /friends
+```
 
 The private endpoint:
 

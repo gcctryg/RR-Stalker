@@ -58,6 +58,22 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if let friends = bridge.friends {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Friends")
+                            .font(.headline)
+
+                        ForEach(friends.friends) { friend in
+                            Text("\(friend.gameName)#\(friend.tagLine)")
+                                .font(.footnote.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+
                 if let errorMessage = bridge.errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
@@ -74,6 +90,13 @@ struct ContentView: View {
 
                 if let storefrontErrorMessage = bridge.storefrontErrorMessage {
                     Text(storefrontErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let friendsErrorMessage = bridge.friendsErrorMessage {
+                    Text(friendsErrorMessage)
                         .font(.footnote)
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
@@ -189,9 +212,11 @@ final class PCBridgeClient: ObservableObject {
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
     @Published var storefront: BridgeStorefront?
+    @Published var friends: BridgeFriends?
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
+    @Published var friendsErrorMessage: String?
     @Published var isLoading = false
 
     // Replace this with your PC's local IP address.
@@ -202,6 +227,7 @@ final class PCBridgeClient: ObservableObject {
         errorMessage = nil
         walletErrorMessage = nil
         storefrontErrorMessage = nil
+        friendsErrorMessage = nil
 
         do {
             let url = baseURL.appending(path: "player")
@@ -226,6 +252,14 @@ final class PCBridgeClient: ObservableObject {
             } catch {
                 storefront = nil
                 storefrontErrorMessage = "Player loaded, but shop failed: \(error.localizedDescription)"
+            }
+
+            let friendsURL = baseURL.appending(path: "friends")
+            do {
+                friends = try await fetchJSON(from: friendsURL)
+            } catch {
+                friends = nil
+                friendsErrorMessage = "Player loaded, but friends failed: \(error.localizedDescription)"
             }
         } catch {
             errorMessage = "Could not load player data: \(error.localizedDescription)"
@@ -317,6 +351,20 @@ struct BridgeStorefrontOffer: Decodable, Identifiable {
 
     var id: String {
         offerID
+    }
+}
+
+struct BridgeFriends: Decodable {
+    let friends: [BridgeFriend]
+}
+
+struct BridgeFriend: Decodable, Identifiable {
+    let puuid: String
+    let gameName: String
+    let tagLine: String
+
+    var id: String {
+        puuid
     }
 }
 

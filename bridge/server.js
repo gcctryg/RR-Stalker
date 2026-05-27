@@ -1,21 +1,33 @@
 const http = require("http");
 const https = require("https");
+const path = require("path");
+const { execFile } = require("child_process");
 const { URL } = require("url");
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const bridgeKey = process.env.RR_BRIDGE_KEY || "";
 const valorantShard = process.env.VALORANT_SHARD || "";
-const valorantAccessToken = process.env.VALORANT_ACCESS_TOKEN || "";
-const valorantEntitlementsToken = process.env.VALORANT_ENTITLEMENTS_TOKEN || "";
+const initialValorantAccessToken = process.env.VALORANT_ACCESS_TOKEN || "";
+const initialValorantEntitlementsToken = process.env.VALORANT_ENTITLEMENTS_TOKEN || "";
 const valorantClientPlatform = process.env.VALORANT_CLIENT_PLATFORM || "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9";
-const valorantClientVersion = process.env.VALORANT_CLIENT_VERSION || "";
-const valorantPUUID = process.env.VALORANT_PUUID || "";
-const valorantGameName = process.env.VALORANT_GAME_NAME || "";
-const valorantTagLine = process.env.VALORANT_TAG_LINE || "";
+const initialValorantClientVersion = process.env.VALORANT_CLIENT_VERSION || "";
+const initialValorantPUUID = process.env.VALORANT_PUUID || "";
+const initialValorantGameName = process.env.VALORANT_GAME_NAME || "";
+const initialValorantTagLine = process.env.VALORANT_TAG_LINE || "";
 const riotClientPort = process.env.RIOT_CLIENT_PORT || "";
 const riotClientPassword = process.env.RIOT_CLIENT_PASSWORD || "";
+const riotLockfilePath = process.env.RIOT_LOCKFILE_PATH || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
+const authState = {
+  accessToken: initialValorantAccessToken,
+  entitlementsToken: initialValorantEntitlementsToken,
+  clientVersion: initialValorantClientVersion,
+  puuid: initialValorantPUUID,
+  gameName: initialValorantGameName,
+  tagLine: initialValorantTagLine,
+  refreshedAt: 0
+};
 
 function sendJSON(res, statusCode, body) {
   const payload = JSON.stringify(body, null, 2);
@@ -45,30 +57,102 @@ function requireBridgeKey(req, res) {
   return false;
 }
 
+function runAuthHelper() {
+  return new Promise((resolve, reject) => {
+    if (!riotLockfilePath) {
+      resolve(null);
+      return;
+    }
+
+    execFile(
+      process.execPath,
+      [path.join(__dirname, "riot-auth.js"), riotLockfilePath],
+      { windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || error.message));
+          return;
+        }
+
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          reject(new Error(`Could not parse auth helper output: ${stdout}`));
+        }
+      }
+    );
+  });
+}
+
+function applyAuthPayload(payload) {
+  if (!payload) {
+    return;
+  }
+
+  if (payload.accessToken) {
+    authState.accessToken = payload.accessToken;
+  }
+
+  if (payload.entitlementsToken) {
+    authState.entitlementsToken = payload.entitlementsToken;
+  }
+
+  if (payload.subject) {
+    authState.puuid = payload.subject;
+  }
+
+  if (payload.gameName) {
+    authState.gameName = payload.gameName;
+  }
+
+  if (payload.tagLine) {
+    authState.tagLine = payload.tagLine;
+  }
+
+  if (payload.clientVersion) {
+    authState.clientVersion = payload.clientVersion;
+  }
+
+  authState.refreshedAt = Date.now();
+}
+
+async function refreshAuthState({ force = false } = {}) {
+  if (useMocks || !riotLockfilePath) {
+    return;
+  }
+
+  if (!force && Date.now() - authState.refreshedAt < 30000) {
+    return;
+  }
+
+  const payload = await runAuthHelper();
+  applyAuthPayload(payload);
+}
+
 function getMockPlayer() {
   return {
-    gameName: valorantGameName || "ExamplePlayer",
-    tagLine: valorantTagLine || "NA1",
-    puuid: valorantPUUID || "mock-puuid",
+    gameName: authState.gameName || "ExamplePlayer",
+    tagLine: authState.tagLine || "NA1",
+    puuid: authState.puuid || "mock-puuid",
     level: 111
   };
 }
 
 function getTokenPlayer() {
-  if (!valorantGameName && !valorantTagLine && !valorantPUUID) {
+  if (!authState.gameName && !authState.tagLine && !authState.puuid) {
     return null;
   }
 
   return {
-    gameName: valorantGameName || "Unknown",
-    tagLine: valorantTagLine || "",
-    puuid: valorantPUUID || "mock-puuid",
+    gameName: authState.gameName || "Unknown",
+    tagLine: authState.tagLine || "",
+    puuid: authState.puuid || "mock-puuid",
     level: 111
   };
 }
 
 async function fetchAccountLevel(puuid, shard) {
-  if (useMocks || !puuid || !shard || !valorantAccessToken || !valorantEntitlementsToken) {
+  if (useMocks || !puuid || !shard || !authState.accessToken || !authState.entitlementsToken) {
     return null;
   }
 
@@ -120,7 +204,7 @@ function requestLocalRiotJSON(url, headers) {
         }
 
         if (response.statusCode < 200 || response.statusCode > 299) {
-          const error = new Error("Riot account alias request failed.");
+          const error = new Error("Riot local request failed.");
           error.statusCode = response.statusCode;
           error.code = "riot_account_alias_failed";
           error.body = body;
@@ -137,22 +221,27 @@ function requestLocalRiotJSON(url, headers) {
   });
 }
 
+function getLocalRiotAuthHeaders() {
+  const credentials = Buffer.from(`riot:${riotClientPassword}`, "ascii").toString("base64");
+  return {
+    Authorization: `Basic ${credentials}`
+  };
+}
+
 async function fetchPlayerAlias() {
   const shard = valorantShard;
+  await refreshAuthState({ force: true });
 
   if (useMocks || !riotClientPort || !riotClientPassword) {
     return withAccountLevel(getMockPlayer(), shard);
   }
 
-  const credentials = Buffer.from(`riot:${riotClientPassword}`, "ascii").toString("base64");
   let body;
 
   try {
     body = await requestLocalRiotJSON(
       `https://127.0.0.1:${riotClientPort}/player-account/aliases/v1/active`,
-      {
-        Authorization: `Basic ${credentials}`
-      }
+      getLocalRiotAuthHeaders()
     );
   } catch (error) {
     const tokenPlayer = getTokenPlayer();
@@ -166,9 +255,54 @@ async function fetchPlayerAlias() {
   return withAccountLevel({
     gameName: body.game_name || "Unknown",
     tagLine: body.tag_line || "",
-    puuid: valorantPUUID || "mock-puuid",
+    puuid: authState.puuid || "mock-puuid",
     level: 111
   }, shard);
+}
+
+function getMockFriends() {
+  return {
+    friends: [
+      {
+        puuid: "mock-friend-1",
+        gameName: "FriendlyJett",
+        tagLine: "NA1"
+      },
+      {
+        puuid: "mock-friend-2",
+        gameName: "PocketSage",
+        tagLine: "GG"
+      }
+    ],
+    source: "mock"
+  };
+}
+
+async function fetchFriends() {
+  if (useMocks) {
+    return getMockFriends();
+  }
+
+  if (!riotClientPort || !riotClientPassword) {
+    const error = new Error("Start the bridge with start-bridge.ps1 to load Riot Client friends.");
+    error.statusCode = 503;
+    error.code = "missing_riot_client_credentials";
+    throw error;
+  }
+
+  const body = await requestLocalRiotJSON(
+    `https://127.0.0.1:${riotClientPort}/chat/v4/friends`,
+    getLocalRiotAuthHeaders()
+  );
+  const friends = (body.friends || []).map((friend) => ({
+    puuid: friend.puuid,
+    gameName: friend.game_name || friend.name || "Unknown",
+    tagLine: friend.game_tag || ""
+  }));
+
+  return {
+    friends
+  };
 }
 
 function getMockWallet(puuid) {
@@ -232,18 +366,33 @@ function normalizeBearerToken(token) {
   return token.replace(/^Bearer\s+/i, "").trim();
 }
 
+function requireMatchingPUUID(puuid) {
+  if (!authState.puuid || authState.puuid === puuid) {
+    return;
+  }
+
+  const error = new Error("Requested PUUID does not match the current Riot auth token. Reload player data after switching accounts.");
+  error.statusCode = 409;
+  error.code = "puuid_mismatch";
+  error.body = {
+    requestedPUUID: puuid,
+    currentPUUID: authState.puuid
+  };
+  throw error;
+}
+
 function getRiotHeaders() {
   const headers = {
-    Authorization: `Bearer ${normalizeBearerToken(valorantAccessToken)}`,
-    "X-Riot-Entitlements-JWT": valorantEntitlementsToken.trim()
+    Authorization: `Bearer ${normalizeBearerToken(authState.accessToken)}`,
+    "X-Riot-Entitlements-JWT": authState.entitlementsToken.trim()
   };
 
   if (valorantClientPlatform) {
     headers["X-Riot-ClientPlatform"] = valorantClientPlatform.trim();
   }
 
-  if (valorantClientVersion) {
-    headers["X-Riot-ClientVersion"] = valorantClientVersion.trim();
+  if (authState.clientVersion) {
+    headers["X-Riot-ClientVersion"] = authState.clientVersion.trim();
   }
 
   return headers;
@@ -302,6 +451,8 @@ async function fetchWallet(puuid, shard) {
     return getMockWallet(puuid);
   }
 
+  await refreshAuthState();
+
   if (!shard) {
     const error = new Error("Set VALORANT_SHARD or pass ?shard=na to use wallet.");
     error.statusCode = 400;
@@ -316,12 +467,14 @@ async function fetchWallet(puuid, shard) {
     throw error;
   }
 
-  if (!valorantAccessToken || !valorantEntitlementsToken) {
+  if (!authState.accessToken || !authState.entitlementsToken) {
     const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
     error.statusCode = 503;
     error.code = "missing_riot_credentials";
     throw error;
   }
+
+  requireMatchingPUUID(puuid);
 
   return fetchRiotJSON(`https://pd.${shard}.a.pvp.net/store/v1/wallet/${encodeURIComponent(puuid)}`, {
     errorMessage: "Riot wallet request failed.",
@@ -333,6 +486,8 @@ async function fetchStorefront(puuid, shard) {
   if (useMocks) {
     return getMockStorefront();
   }
+
+  await refreshAuthState();
 
   if (!shard) {
     const error = new Error("Set VALORANT_SHARD or pass ?shard=na to use storefront.");
@@ -348,12 +503,14 @@ async function fetchStorefront(puuid, shard) {
     throw error;
   }
 
-  if (!valorantAccessToken || !valorantEntitlementsToken) {
+  if (!authState.accessToken || !authState.entitlementsToken) {
     const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
     error.statusCode = 503;
     error.code = "missing_riot_credentials";
     throw error;
   }
+
+  requireMatchingPUUID(puuid);
 
   const storefront = await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/store/v3/storefront/${encodeURIComponent(puuid)}`, {
     method: "POST",
@@ -474,6 +631,20 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (requestURL.pathname === "/friends") {
+    try {
+      const friends = await fetchFriends();
+      sendJSON(res, 200, friends);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "friends_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (pathParts[0] === "parties" && pathParts[1] && pathParts[2] === "queues") {
     sendJSON(res, 200, getMockPartyQueues(pathParts[1]));
     return;
@@ -486,6 +657,7 @@ const server = http.createServer(async (req, res) => {
       "GET /player",
       "GET /wallet/:puuid",
       "GET /storefront/:puuid",
+      "GET /friends",
       "GET /parties/:partyID/queues"
     ]
   });
