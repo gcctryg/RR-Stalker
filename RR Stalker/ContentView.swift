@@ -109,33 +109,47 @@ struct CurrentPlayerView: View {
 
 struct FriendListView: View {
     @ObservedObject var bridge: PCBridgeClient
+    @State private var isSelectingFavorites = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Friends")
-                    .font(.largeTitle.bold())
+                HStack {
+                    Text("Friends")
+                        .font(.largeTitle.bold())
 
-                if let friends = bridge.friends {
-                    if friends.friends.isEmpty {
+                    Spacer()
+
+                    Button {
+                        isSelectingFavorites = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Select favorite friends")
+                }
+
+                if bridge.favoriteFriends.isEmpty {
+                    ContentUnavailableView(
+                        "No Favorite Friends",
+                        systemImage: "star",
+                        description: Text("Tap plus to choose friends whose ranks you want to track.")
+                    )
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(bridge.favoriteFriends) { friend in
+                            FriendRow(friend: friend)
+                        }
+                    }
+                }
+
+                if let friends = bridge.friends, friends.friends.isEmpty {
                         ContentUnavailableView(
                             "No Friends Loaded",
                             systemImage: "person.2.slash",
                             description: Text("Refresh the current player data to load your friend list.")
                         )
-                    } else {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(friends.friends) { friend in
-                                FriendRow(friend: friend)
-                            }
-                        }
-                    }
-                } else {
-                    ContentUnavailableView(
-                        "Friend List Empty",
-                        systemImage: "person.2",
-                        description: Text("Use the refresh button on Current Player to load friend data.")
-                    )
                 }
 
                 if let friendsErrorMessage = bridge.friendsErrorMessage {
@@ -147,6 +161,65 @@ struct FriendListView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
+        }
+        .sheet(isPresented: $isSelectingFavorites) {
+            FriendFavoritePicker(bridge: bridge)
+        }
+    }
+}
+
+struct FriendFavoritePicker: View {
+    @ObservedObject var bridge: PCBridgeClient
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let friends = bridge.friends {
+                    ForEach(friends.friends) { friend in
+                        Button {
+                            bridge.toggleFavoriteFriend(friend)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("\(friend.gameName)#\(friend.tagLine)")
+                                        .font(.body)
+                                    Text(friend.puuid)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+
+                                Spacer()
+
+                                if bridge.favoriteFriendIDs.contains(friend.puuid) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Friend List Empty",
+                        systemImage: "person.2",
+                        description: Text("Refresh the current player data first.")
+                    )
+                }
+            }
+            .navigationTitle("Favorite Friends")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Confirm") {
+                        Task {
+                            await bridge.loadFavoriteFriendRanks()
+                            dismiss()
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -303,10 +376,15 @@ struct ShopOfferRow: View {
 
 @MainActor
 final class PCBridgeClient: ObservableObject {
+    private let favoriteFriendIDsKeyPrefix = "favoriteFriendIDs"
+
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
     @Published var storefront: BridgeStorefront?
     @Published var friends: BridgeFriends?
+    @Published var favoriteFriendIDs: Set<String>
+    @Published var favoriteFriendRanks: [String: BridgeFriendMMR] = [:]
+    @Published var favoriteFriendRankErrors: [String: String] = [:]
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
@@ -315,6 +393,25 @@ final class PCBridgeClient: ObservableObject {
 
     // Replace this with your PC's local IP address.
     let baseURL = URL(string: "http://192.168.0.14:3000")!
+
+    init() {
+        favoriteFriendIDs = []
+    }
+
+    var favoriteFriends: [BridgeFriend] {
+        guard let friends else {
+            return []
+        }
+
+        return friends.friends
+            .filter { favoriteFriendIDs.contains($0.puuid) }
+            .map { friend in
+                var favorite = friend
+                favorite.mmr = favoriteFriendRanks[friend.puuid]
+                favorite.mmrError = favoriteFriendRankErrors[friend.puuid]
+                return favorite
+            }
+    }
 
     func loadPlayer() async {
         isLoading = true
@@ -327,6 +424,9 @@ final class PCBridgeClient: ObservableObject {
             let url = baseURL.appending(path: "player")
             let loadedPlayer: BridgePlayer = try await fetchJSON(from: url)
             player = loadedPlayer
+            loadFavoriteFriendIDs(for: loadedPlayer.puuid)
+            favoriteFriendRanks = [:]
+            favoriteFriendRankErrors = [:]
 
             let walletURL = baseURL
                 .appending(path: "wallet")
@@ -351,6 +451,7 @@ final class PCBridgeClient: ObservableObject {
             let friendsURL = baseURL.appending(path: "friends")
             do {
                 friends = try await fetchJSON(from: friendsURL)
+                await loadFavoriteFriendRanks()
             } catch {
                 friends = nil
                 friendsErrorMessage = "Player loaded, but friends failed: \(error.localizedDescription)"
@@ -360,6 +461,79 @@ final class PCBridgeClient: ObservableObject {
         }
 
         isLoading = false
+    }
+
+    func toggleFavoriteFriend(_ friend: BridgeFriend) {
+        if favoriteFriendIDs.contains(friend.puuid) {
+            favoriteFriendIDs.remove(friend.puuid)
+            favoriteFriendRanks.removeValue(forKey: friend.puuid)
+            favoriteFriendRankErrors.removeValue(forKey: friend.puuid)
+        } else {
+            favoriteFriendIDs.insert(friend.puuid)
+        }
+
+        saveFavoriteFriendIDs()
+    }
+
+    func loadFavoriteFriendRanks() async {
+        friendsErrorMessage = nil
+
+        guard !favoriteFriendIDs.isEmpty else {
+            favoriteFriendRanks = [:]
+            favoriteFriendRankErrors = [:]
+            return
+        }
+
+        do {
+            let joinedIDs = favoriteFriendIDs.joined(separator: ",")
+            var components = URLComponents(
+                url: baseURL.appending(path: "friends/mmr"),
+                resolvingAgainstBaseURL: false
+            )
+            components?.queryItems = [
+                URLQueryItem(name: "puuids", value: joinedIDs)
+            ]
+
+            guard let url = components?.url else {
+                throw BridgeError.invalidResponse
+            }
+
+            let rankedFriends: BridgeFriends = try await fetchJSON(from: url)
+            var ranks: [String: BridgeFriendMMR] = [:]
+            var errors: [String: String] = [:]
+
+            for friend in rankedFriends.friends {
+                if let mmr = friend.mmr {
+                    ranks[friend.puuid] = mmr
+                }
+
+                if let mmrError = friend.mmrError {
+                    errors[friend.puuid] = friend.rankUnavailableText
+                }
+            }
+
+            favoriteFriendRanks = ranks
+            favoriteFriendRankErrors = errors
+        } catch {
+            friendsErrorMessage = "Favorite ranks failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadFavoriteFriendIDs(for puuid: String) {
+        let savedIDs = UserDefaults.standard.stringArray(forKey: favoriteFriendIDsKey(for: puuid)) ?? []
+        favoriteFriendIDs = Set(savedIDs)
+    }
+
+    private func saveFavoriteFriendIDs() {
+        guard let player else {
+            return
+        }
+
+        UserDefaults.standard.set(Array(favoriteFriendIDs), forKey: favoriteFriendIDsKey(for: player.puuid))
+    }
+
+    private func favoriteFriendIDsKey(for puuid: String) -> String {
+        "\(favoriteFriendIDsKeyPrefix).\(puuid)"
     }
 
     private func fetchJSON<T: Decodable>(from url: URL) async throws -> T {
@@ -456,9 +630,9 @@ struct BridgeFriend: Decodable, Identifiable {
     let puuid: String
     let gameName: String
     let tagLine: String
-    let mmr: BridgeFriendMMR?
-    let mmrError: String?
-    let mmrErrorStatus: Int?
+    var mmr: BridgeFriendMMR?
+    var mmrError: String?
+    var mmrErrorStatus: Int?
 
     var id: String {
         puuid

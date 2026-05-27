@@ -276,30 +276,12 @@ function getMockFriends() {
       {
         puuid: "mock-friend-1",
         gameName: "FriendlyJett",
-        tagLine: "NA1",
-        mmr: {
-          subject: "mock-friend-1",
-          competitiveTier: 15,
-          rankedRating: 50,
-          leaderboardRank: 0,
-          numberOfWins: 12,
-          seasonID: "mock-season",
-          hasRank: true
-        }
+        tagLine: "NA1"
       },
       {
         puuid: "mock-friend-2",
         gameName: "PocketSage",
-        tagLine: "GG",
-        mmr: {
-          subject: "mock-friend-2",
-          competitiveTier: 18,
-          rankedRating: 55,
-          leaderboardRank: 0,
-          numberOfWins: 64,
-          seasonID: "mock-season",
-          hasRank: true
-        }
+        tagLine: "GG"
       }
     ],
     source: "mock"
@@ -441,7 +423,7 @@ async function fetchFriends() {
     throw error;
   }
 
-  const friends = await enrichFriendsWithMMR(normalizeFriendsBody(body), valorantShard);
+  const friends = normalizeFriendsBody(body);
 
   return {
     friends,
@@ -696,23 +678,23 @@ async function enrichFriendsWithMMR(friends, shard) {
   for (let index = 0; index < friends.length; index += concurrency) {
     const batch = friends.slice(index, index + concurrency);
     const enrichedBatch = await Promise.all(batch.map(async (friend) => {
-    if (!friend.puuid) {
-      return friend;
-    }
+      if (!friend.puuid) {
+        return friend;
+      }
 
-    try {
-      return {
-        ...friend,
-        mmr: await fetchPlayerMMR(friend.puuid, shard)
-      };
-    } catch (error) {
-      return {
-        ...friend,
-        mmrError: error.code || error.message,
-        mmrErrorStatus: error.statusCode || null,
-        mmrErrorDetails: error.body || null
-      };
-    }
+      try {
+        return {
+          ...friend,
+          mmr: await fetchPlayerMMR(friend.puuid, shard)
+        };
+      } catch (error) {
+        return {
+          ...friend,
+          mmrError: error.code || error.message,
+          mmrErrorStatus: error.statusCode || null,
+          mmrErrorDetails: error.body || null
+        };
+      }
     }));
 
     results.push(...enrichedBatch);
@@ -723,6 +705,20 @@ async function enrichFriendsWithMMR(friends, shard) {
   }
 
   return results;
+}
+
+async function fetchFriendsMMR(puuids, shard) {
+  const uniquePUUIDs = [...new Set(puuids.map((puuid) => puuid.trim()).filter(Boolean))];
+  const friends = uniquePUUIDs.map((puuid) => ({
+    puuid,
+    gameName: "",
+    tagLine: ""
+  }));
+  const enrichedFriends = await enrichFriendsWithMMR(friends, shard);
+
+  return {
+    friends: enrichedFriends
+  };
 }
 
 function getLatestCompetitiveInfo(mmr) {
@@ -752,7 +748,8 @@ async function fetchPlayerMMR(puuid, shard) {
       rankedRating: 50,
       leaderboardRank: 0,
       numberOfWins: 12,
-      seasonID: "mock-season"
+      seasonID: "mock-season",
+      hasRank: true
     };
   }
 
@@ -921,6 +918,22 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (requestURL.pathname === "/friends/mmr") {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const puuids = (requestURL.searchParams.get("puuids") || "").split(",");
+      const result = await fetchFriendsMMR(puuids, shard);
+      sendJSON(res, 200, result);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "friends_mmr_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (pathParts[0] === "mmr" && pathParts[1]) {
     try {
       const shard = requestURL.searchParams.get("shard") || valorantShard;
@@ -949,6 +962,7 @@ const server = http.createServer(async (req, res) => {
       "GET /wallet/:puuid",
       "GET /storefront/:puuid",
       "GET /friends",
+      "GET /friends/mmr?puuids=:puuid,:puuid",
       "GET /friends/first-mmr",
       "GET /mmr/:puuid",
       "GET /parties/:partyID/queues"

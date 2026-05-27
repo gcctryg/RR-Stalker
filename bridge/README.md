@@ -85,6 +85,7 @@ curl http://localhost:3000/player
 curl http://localhost:3000/wallet/mock-puuid
 curl http://localhost:3000/storefront/mock-puuid
 curl http://localhost:3000/friends
+curl "http://localhost:3000/friends/mmr?puuids=mock-puuid"
 curl http://localhost:3000/friends/first-mmr
 curl http://localhost:3000/parties/mock-party-id/queues
 ```
@@ -170,6 +171,17 @@ maps to this local bridge route:
 ```text
 GET /friends
 ```
+
+`/friends` returns names and PUUIDs only. Use the selected/favorite PUUIDs with
+this local bridge route to fetch ranks without rate-limiting the whole friend
+list:
+
+```text
+GET /friends/mmr?puuids=:puuid,:puuid
+```
+
+The iOS app saves favorite friend selections per signed-in player account, then
+only calls `/friends/mmr` for those favorite PUUIDs.
 
 The private endpoint:
 
