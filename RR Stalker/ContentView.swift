@@ -918,7 +918,8 @@ final class PCBridgeClient: ObservableObject {
             favoriteFriendStatuses = statuses
             saveCachedSnapshot()
         } catch {
-            // Online status is lightweight decoration; keep the last known state on failure.
+            favoriteFriendStatuses = [:]
+            saveCachedSnapshot()
         }
     }
 
@@ -1226,6 +1227,7 @@ struct BridgeFriendStatus: Codable {
     let puuid: String
     let isOnline: Bool
     let availability: String
+    let state: String?
     let product: String
 }
 

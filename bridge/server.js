@@ -418,6 +418,7 @@ async function fetchFriendsStatus(puuids) {
         puuid,
         isOnline: index % 2 === 0,
         availability: index % 2 === 0 ? "chat" : "offline",
+        state: index % 2 === 0 ? "chat" : "offline",
         product: index % 2 === 0 ? "valorant" : ""
       })),
       missing: [],
@@ -443,17 +444,21 @@ async function fetchFriendsStatus(puuids) {
         puuid,
         isOnline: false,
         availability: "offline",
+        state: "offline",
         product: ""
       };
     }
 
-    const availability = presence.availability || "";
-    const product = presence.product || "";
+    const state = (presence.state || "").toLowerCase();
+    const product = (presence.product || "").toLowerCase();
+    const isValorantPresence = product === "valorant";
+    const isOnline = isValorantPresence && ["chat", "dnd", "away"].includes(state);
 
     return {
       puuid,
-      isOnline: availability.toLowerCase() !== "offline",
-      availability,
+      isOnline,
+      availability: state || "unknown",
+      state: state || "unknown",
       product
     };
   });
