@@ -443,33 +443,61 @@ async function fetchFriendsCards(puuids) {
         wideArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/wideart.png",
         largeArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/largeart.png"
       })),
-      source: "mock"
+      missing: [],
+      source: "mock",
+      presenceCount: uniquePUUIDs.length
     };
   }
 
   const { presences, source } = await fetchLocalPresences();
   const requestedPUUIDs = new Set(uniquePUUIDs);
-  const cards = await Promise.all(presences
-    .filter((presence) => requestedPUUIDs.has(presence.puuid))
-    .map(async (presence) => {
-      const privatePresence = decodePresencePrivate(presence.private);
-      const playerCardID = findPlayerCardID(privatePresence);
-      const card = await fetchPlayerCard(playerCardID);
+  const presenceByPUUID = new Map(
+    presences
+      .filter((presence) => requestedPUUIDs.has(presence.puuid))
+      .map((presence) => [presence.puuid, presence])
+  );
+  const missing = [];
+  const cards = await Promise.all(uniquePUUIDs.map(async (puuid) => {
+    const presence = presenceByPUUID.get(puuid);
 
-      return {
-        puuid: presence.puuid,
-        playerCardID,
-        displayName: card?.displayName || "",
-        displayIcon: card?.displayIcon || null,
-        smallArt: card?.smallArt || null,
-        wideArt: card?.wideArt || null,
-        largeArt: card?.largeArt || null
-      };
-    }));
+    if (!presence) {
+      missing.push({ puuid, reason: "presence_not_found" });
+      return null;
+    }
+
+    const privatePresence = decodePresencePrivate(presence.private);
+    if (!privatePresence) {
+      missing.push({ puuid, reason: "private_presence_missing_or_invalid" });
+      return null;
+    }
+
+    const playerCardID = findPlayerCardID(privatePresence);
+    if (!playerCardID) {
+      missing.push({ puuid, reason: "player_card_id_not_found" });
+      return null;
+    }
+
+    const card = await fetchPlayerCard(playerCardID);
+    if (!card) {
+      missing.push({ puuid, reason: "player_card_asset_not_found", playerCardID });
+    }
+
+    return {
+      puuid,
+      playerCardID,
+      displayName: card?.displayName || "",
+      displayIcon: card?.displayIcon || null,
+      smallArt: card?.smallArt || null,
+      wideArt: card?.wideArt || null,
+      largeArt: card?.largeArt || null
+    };
+  }));
 
   return {
-    cards: cards.filter((card) => card.playerCardID),
-    source
+    cards: cards.filter((card) => card?.playerCardID),
+    missing,
+    source,
+    presenceCount: presences.length
   };
 }
 

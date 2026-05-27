@@ -286,6 +286,9 @@ struct FriendFavoritePicker: View {
 
 struct FriendRow: View {
     let friend: BridgeFriend
+    private var hasCardBackground: Bool {
+        friend.playerCard?.backgroundURL != nil
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -295,11 +298,12 @@ struct FriendRow: View {
                 Text("\(friend.gameName)#\(friend.tagLine)")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
+                    .foregroundStyle(primaryTextStyle)
 
                 if let mmr = friend.mmr {
                     Text(mmr.rankName)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryTextStyle)
                 }
 
                 if let mmr = friend.mmr, mmr.hasRank {
@@ -311,20 +315,20 @@ struct FriendRow: View {
                         }
                     }
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryTextStyle)
                 } else if friend.mmr != nil {
                     Text("Unrated")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryTextStyle)
                 } else if friend.mmrError != nil {
                     Text(friend.rankUnavailableText)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryTextStyle)
                 }
 
                 Text(friend.puuid)
                     .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(tertiaryTextStyle)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
@@ -336,6 +340,19 @@ struct FriendRow: View {
             FriendCardBackground(card: friend.playerCard)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: hasCardBackground ? .black.opacity(0.18) : .clear, radius: 1, x: 0, y: 1)
+    }
+
+    private var primaryTextStyle: Color {
+        hasCardBackground ? .white : .primary
+    }
+
+    private var secondaryTextStyle: Color {
+        hasCardBackground ? .white.opacity(0.9) : .secondary
+    }
+
+    private var tertiaryTextStyle: Color {
+        hasCardBackground ? .white.opacity(0.72) : .tertiary
     }
 }
 
@@ -354,7 +371,17 @@ struct FriendCardBackground: View {
                         image
                             .resizable()
                             .scaledToFill()
-                            .overlay(.black.opacity(0.42))
+                            .overlay(
+                                LinearGradient(
+                                    colors: [
+                                        .black.opacity(0.72),
+                                        .black.opacity(0.48),
+                                        .black.opacity(0.68)
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
                     default:
                         Color.clear
                     }
@@ -990,6 +1017,7 @@ struct BridgeFriend: Decodable, Identifiable {
 
 struct BridgeFriendCardsResponse: Decodable {
     let cards: [BridgeFriendCard]
+    let missing: [BridgeFriendCardMissing]?
 }
 
 struct BridgeFriendCard: Decodable {
@@ -1004,6 +1032,11 @@ struct BridgeFriendCard: Decodable {
     var backgroundURL: URL? {
         wideArt ?? largeArt ?? smallArt ?? displayIcon
     }
+}
+
+struct BridgeFriendCardMissing: Decodable {
+    let puuid: String
+    let reason: String
 }
 
 struct BridgeFriendMMR: Decodable {
