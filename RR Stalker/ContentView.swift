@@ -160,7 +160,6 @@ struct ProfileView: View {
 struct FriendListView: View {
     @ObservedObject var bridge: PCBridgeClient
     @State private var isSelectingFavorites = false
-    @StateObject private var competitiveTiers = CompetitiveTierStore()
 
     var body: some View {
         ScrollView {
@@ -190,10 +189,7 @@ struct FriendListView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(bridge.favoriteFriends) { friend in
-                            FriendRow(
-                                friend: friend,
-                                rankAsset: friend.mmr.flatMap { competitiveTiers.rankAsset(for: $0.competitiveTier) }
-                            )
+                            FriendRow(friend: friend)
                         }
                     }
                 }
@@ -218,9 +214,6 @@ struct FriendListView: View {
         }
         .sheet(isPresented: $isSelectingFavorites) {
             FriendFavoritePicker(bridge: bridge)
-        }
-        .task {
-            await competitiveTiers.load()
         }
     }
 }
@@ -283,11 +276,10 @@ struct FriendFavoritePicker: View {
 
 struct FriendRow: View {
     let friend: BridgeFriend
-    let rankAsset: CompetitiveTierAsset?
 
     var body: some View {
         HStack(spacing: 12) {
-            RankIconView(asset: rankAsset, mmr: friend.mmr)
+            RankIconView(mmr: friend.mmr)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(friend.gameName)#\(friend.tagLine)")
@@ -295,7 +287,7 @@ struct FriendRow: View {
                     .lineLimit(1)
 
                 if let mmr = friend.mmr {
-                    Text(rankAsset?.displayName ?? mmr.rankName)
+                    Text(mmr.rankName)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -335,12 +327,11 @@ struct FriendRow: View {
 }
 
 struct RankIconView: View {
-    let asset: CompetitiveTierAsset?
     let mmr: BridgeFriendMMR?
 
     var body: some View {
         ZStack {
-            if let iconURL = asset?.iconURL ?? mmr?.rankIconURL {
+            if let iconURL = mmr?.rankIconURL {
                 AsyncImage(url: iconURL) { phase in
                     switch phase {
                     case .success(let image):
@@ -361,7 +352,7 @@ struct RankIconView: View {
     private var fallbackIcon: some View {
         Image(systemName: mmr?.hasRank == true ? "triangle.fill" : "minus.circle")
             .font(.system(size: 28, weight: .semibold))
-            .foregroundStyle(asset?.color ?? .secondary)
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -886,104 +877,6 @@ struct BridgeFriendMMR: Decodable {
         hasRank = (try container.decodeIfPresent(Bool.self, forKey: .hasRank)) ?? (competitiveTier > 0)
         rankName = try container.decodeIfPresent(String.self, forKey: .rankName) ?? (competitiveTier > 0 ? "Tier \(competitiveTier)" : "Unrated")
         rankIconURL = try container.decodeIfPresent(URL.self, forKey: .rankIconURL)
-    }
-}
-
-@MainActor
-final class CompetitiveTierStore: ObservableObject {
-    @Published private var ranksByTier: [Int: CompetitiveTierAsset] = [:]
-
-    private var hasLoaded = false
-
-    func load() async {
-        guard !hasLoaded else {
-            return
-        }
-
-        do {
-            let url = URL(string: "https://valorant-api.com/v1/competitivetiers")!
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let response = try JSONDecoder().decode(CompetitiveTiersResponse.self, from: data)
-
-            if let latestTierSet = response.data.last {
-                ranksByTier = Dictionary(
-                    uniqueKeysWithValues: latestTierSet.tiers.map { tier in
-                        (tier.tier, CompetitiveTierAsset(tier: tier))
-                    }
-                )
-            }
-
-            hasLoaded = true
-        } catch {
-            ranksByTier = [:]
-        }
-    }
-
-    func rankAsset(for tier: Int) -> CompetitiveTierAsset? {
-        ranksByTier[tier]
-    }
-}
-
-struct CompetitiveTierAsset {
-    let tier: Int
-    let displayName: String
-    let iconURL: URL?
-    let color: Color
-
-    init(tier: CompetitiveTier) {
-        self.tier = tier.tier
-        displayName = tier.tierName
-        iconURL = tier.largeIcon ?? tier.rankTriangleUpIcon ?? tier.rankTriangleDownIcon ?? tier.smallIcon
-        color = Color(hex: tier.color) ?? .secondary
-    }
-}
-
-struct CompetitiveTiersResponse: Decodable {
-    let data: [CompetitiveTierSet]
-}
-
-struct CompetitiveTierSet: Decodable {
-    let tiers: [CompetitiveTier]
-}
-
-struct CompetitiveTier: Decodable {
-    let tier: Int
-    let tierName: String
-    let color: String
-    let smallIcon: URL?
-    let largeIcon: URL?
-    let rankTriangleDownIcon: URL?
-    let rankTriangleUpIcon: URL?
-}
-
-extension Color {
-    init?(hex: String) {
-        let trimmedHex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        guard let value = UInt64(trimmedHex, radix: 16) else {
-            return nil
-        }
-
-        let red: Double
-        let green: Double
-        let blue: Double
-        let alpha: Double
-
-        switch trimmedHex.count {
-        case 6:
-            red = Double((value & 0xFF0000) >> 16) / 255
-            green = Double((value & 0x00FF00) >> 8) / 255
-            blue = Double(value & 0x0000FF) / 255
-            alpha = 1
-        case 8:
-            red = Double((value & 0xFF000000) >> 24) / 255
-            green = Double((value & 0x00FF0000) >> 16) / 255
-            blue = Double((value & 0x0000FF00) >> 8) / 255
-            alpha = Double(value & 0x000000FF) / 255
-        default:
-            return nil
-        }
-
-        self = Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }
 }
 

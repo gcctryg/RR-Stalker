@@ -1,6 +1,7 @@
 const http = require("http");
 const https = require("https");
 const path = require("path");
+const fs = require("fs");
 const { execFile } = require("child_process");
 const { URL } = require("url");
 
@@ -21,6 +22,7 @@ const riotLockfilePath = process.env.RIOT_LOCKFILE_PATH || "";
 const valorantRemotingPort = process.env.VALORANT_REMOTING_PORT || "";
 const valorantRemotingAuthToken = process.env.VALORANT_REMOTING_AUTH_TOKEN || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
+const cacheDirectory = path.join(__dirname, ".cache");
 const authState = {
   accessToken: initialValorantAccessToken,
   entitlementsToken: initialValorantEntitlementsToken,
@@ -57,6 +59,42 @@ function requireBridgeKey(req, res) {
     message: "Missing or incorrect X-RR-Bridge-Key header."
   });
   return false;
+}
+
+function readCachedJSON(name) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(cacheDirectory, `${name}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedJSON(name, body) {
+  try {
+    fs.mkdirSync(cacheDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDirectory, `${name}.json`),
+      JSON.stringify({ savedAt: Date.now(), body }),
+      "utf8"
+    );
+  } catch {
+    // Cache writes should never break the bridge.
+  }
+}
+
+async function fetchValorantAPIJSON(url, cacheName) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Valorant-API returned HTTP ${response.status}`);
+    }
+
+    const body = await response.json();
+    writeCachedJSON(cacheName, body);
+    return body;
+  } catch {
+    return readCachedJSON(cacheName)?.body || null;
+  }
 }
 
 function runAuthHelper() {
@@ -570,7 +608,15 @@ function getRiotHeaders() {
 }
 
 const skinLevelCache = new Map();
-let weaponsCache = null;
+const skinChromaCache = new Map();
+const skinCache = new Map();
+const weaponAssetCache = {
+  loadedAt: 0,
+  weaponsByID: new Map(),
+  skinLevelsByID: new Map(),
+  skinChromasByID: new Map(),
+  skinsByID: new Map()
+};
 const competitiveTierCache = {
   loadedAt: 0,
   tiers: new Map()
@@ -581,31 +627,95 @@ async function fetchSkinLevel(itemID) {
     return skinLevelCache.get(itemID);
   }
 
-  const response = await fetch(`https://valorant-api.com/v1/weapons/skinlevels/${encodeURIComponent(itemID)}`);
-  if (!response.ok) {
+  const weaponAssets = await fetchWeaponAssets();
+  if (weaponAssets.skinLevelsByID.has(itemID)) {
+    const skinLevel = weaponAssets.skinLevelsByID.get(itemID);
+    skinLevelCache.set(itemID, skinLevel);
+    return skinLevel;
+  }
+
+  const body = await fetchValorantAPIJSON(
+    `https://valorant-api.com/v1/weapons/skinlevels/${encodeURIComponent(itemID)}`,
+    `skinlevel-${itemID}`
+  );
+  if (!body) {
     return null;
   }
 
-  const body = await response.json();
   const skinLevel = body.data || null;
   skinLevelCache.set(itemID, skinLevel);
   return skinLevel;
 }
 
-async function fetchWeaponsByID() {
-  if (weaponsCache) {
-    return weaponsCache;
+async function fetchWeaponAssets() {
+  if (Date.now() - weaponAssetCache.loadedAt < 3600000 && weaponAssetCache.weaponsByID.size > 0) {
+    return weaponAssetCache;
   }
 
-  const response = await fetch("https://valorant-api.com/v1/weapons");
-  if (!response.ok) {
-    weaponsCache = new Map();
-    return weaponsCache;
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/weapons", "weapons");
+  if (!body) {
+    return weaponAssetCache;
   }
 
-  const body = await response.json();
-  weaponsCache = new Map((body.data || []).map((weapon) => [weapon.uuid, weapon]));
-  return weaponsCache;
+  const weaponsByID = new Map();
+  const skinLevelsByID = new Map();
+  const skinChromasByID = new Map();
+  const skinsByID = new Map();
+
+  for (const weapon of body.data || []) {
+    weaponsByID.set(weapon.uuid, weapon);
+
+    for (const skin of weapon.skins || []) {
+      skinsByID.set(skin.uuid, skin);
+
+      for (const level of skin.levels || []) {
+        skinLevelsByID.set(level.uuid, level);
+      }
+
+      for (const chroma of skin.chromas || []) {
+        skinChromasByID.set(chroma.uuid, chroma);
+      }
+    }
+  }
+
+  weaponAssetCache.loadedAt = Date.now();
+  weaponAssetCache.weaponsByID = weaponsByID;
+  weaponAssetCache.skinLevelsByID = skinLevelsByID;
+  weaponAssetCache.skinChromasByID = skinChromasByID;
+  weaponAssetCache.skinsByID = skinsByID;
+  return weaponAssetCache;
+}
+
+async function fetchSkinChroma(chromaID) {
+  if (!chromaID) {
+    return null;
+  }
+
+  if (skinChromaCache.has(chromaID)) {
+    return skinChromaCache.get(chromaID);
+  }
+
+  const weaponAssets = await fetchWeaponAssets();
+  if (weaponAssets.skinChromasByID.has(chromaID)) {
+    const chroma = weaponAssets.skinChromasByID.get(chromaID);
+    skinChromaCache.set(chromaID, chroma);
+    return chroma;
+  }
+
+  return null;
+}
+
+function getSkinByID(skinID) {
+  const skin = weaponAssetCache.skinsByID.get(skinID) || null;
+  if (skinID && skin) {
+    skinCache.set(skinID, skin);
+  }
+
+  return skinID ? skinCache.get(skinID) || null : null;
+}
+
+function firstURL(...urls) {
+  return urls.find((url) => typeof url === "string" && url.length > 0) || null;
 }
 
 function normalizeWeaponCategory(category) {
@@ -621,12 +731,11 @@ async function fetchCompetitiveTierAssets() {
     return competitiveTierCache.tiers;
   }
 
-  const response = await fetch("https://valorant-api.com/v1/competitivetiers");
-  if (!response.ok) {
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/competitivetiers", "competitivetiers");
+  if (!body) {
     return competitiveTierCache.tiers;
   }
 
-  const body = await response.json();
   const tierSets = Array.isArray(body.data) ? body.data : [];
   const latestTierSet = tierSets.at(-1);
   const tiers = new Map();
@@ -822,25 +931,33 @@ async function fetchPlayerLoadout(puuid, shard) {
 
   requireMatchingPUUID(puuid);
 
-  const [loadout, weaponsByID] = await Promise.all([
+  const [loadout, weaponAssets] = await Promise.all([
     fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
       errorMessage: "Riot player loadout request failed.",
       errorCode: "riot_player_loadout_failed"
     }),
-    fetchWeaponsByID()
+    fetchWeaponAssets()
   ]);
 
   const guns = await Promise.all((loadout.Guns || []).map(async (gun) => {
-    const weapon = weaponsByID.get(gun.ID) || {};
+    const weapon = weaponAssets.weaponsByID.get(gun.ID) || {};
     const skinLevel = gun.SkinLevelID ? await fetchSkinLevel(gun.SkinLevelID) : null;
-    const skinName = skinLevel?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
+    const skinChroma = await fetchSkinChroma(gun.ChromaID);
+    const skin = getSkinByID(gun.SkinID);
+    const skinName = skinLevel?.displayName || skin?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
 
     return {
       id: gun.ID,
       weaponName: weapon.displayName || gun.ID,
       skinName,
       displayName: skinName,
-      iconURL: skinLevel?.displayIcon || weapon.displayIcon || null,
+      iconURL: firstURL(
+        skinLevel?.displayIcon,
+        skinChroma?.fullRender,
+        skinChroma?.displayIcon,
+        skin?.displayIcon,
+        weapon.displayIcon
+      ),
       category: normalizeWeaponCategory(weapon.category),
       skinID: gun.SkinID,
       skinLevelID: gun.SkinLevelID,

@@ -159,6 +159,8 @@ GET /loadout/:puuid
 
 The bridge enriches equipped weapons with public weapon and skin assets from
 Valorant-API so the iOS app can display the current loadout with images.
+Those public asset responses are cached in memory and under `bridge/.cache` so
+refreshing the app does not repeatedly hit Valorant-API for the same images.
 
 The private endpoint:
 
