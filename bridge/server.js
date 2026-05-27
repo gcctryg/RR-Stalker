@@ -690,7 +690,12 @@ async function fetchStorefront(puuid, shard) {
 }
 
 async function enrichFriendsWithMMR(friends, shard) {
-  const results = await Promise.all(friends.map(async (friend) => {
+  const results = [];
+  const concurrency = 4;
+
+  for (let index = 0; index < friends.length; index += concurrency) {
+    const batch = friends.slice(index, index + concurrency);
+    const enrichedBatch = await Promise.all(batch.map(async (friend) => {
     if (!friend.puuid) {
       return friend;
     }
@@ -703,10 +708,19 @@ async function enrichFriendsWithMMR(friends, shard) {
     } catch (error) {
       return {
         ...friend,
-        mmrError: error.code || error.message
+        mmrError: error.code || error.message,
+        mmrErrorStatus: error.statusCode || null,
+        mmrErrorDetails: error.body || null
       };
     }
-  }));
+    }));
+
+    results.push(...enrichedBatch);
+
+    if (index + concurrency < friends.length) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
 
   return results;
 }
