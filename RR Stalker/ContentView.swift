@@ -491,7 +491,7 @@ struct BridgeFriendMMR: Decodable {
         leaderboardRank = try container.decodeIfPresent(Int.self, forKey: .leaderboardRank) ?? 0
         numberOfWins = try container.decodeIfPresent(Int.self, forKey: .numberOfWins) ?? 0
         seasonID = try container.decodeIfPresent(String.self, forKey: .seasonID)
-        hasRank = try container.decodeIfPresent(Bool.self, forKey: .hasRank) ?? competitiveTier > 0
+        hasRank = (try container.decodeIfPresent(Bool.self, forKey: .hasRank)) ?? (competitiveTier > 0)
     }
 
     var rankText: String {
