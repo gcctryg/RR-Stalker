@@ -46,15 +46,24 @@ struct LoadoutView: View {
                     .font(.largeTitle.bold())
 
                 if let loadout = bridge.loadout, !loadout.guns.isEmpty {
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.flexible(), spacing: 12),
-                            GridItem(.flexible(), spacing: 12)
-                        ],
-                        spacing: 12
-                    ) {
-                        ForEach(loadout.guns) { gun in
-                            LoadoutWeaponCard(gun: gun)
+                    VStack(alignment: .leading, spacing: 18) {
+                        ForEach(loadout.sections) { section in
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(section.title)
+                                    .font(section.isMain ? .title3.bold() : .headline)
+
+                                LazyVGrid(
+                                    columns: [
+                                        GridItem(.flexible(), spacing: 12),
+                                        GridItem(.flexible(), spacing: 12)
+                                    ],
+                                    spacing: 12
+                                ) {
+                                    ForEach(section.guns) { gun in
+                                        LoadoutWeaponCard(gun: gun)
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if bridge.isLoading {
@@ -582,10 +591,13 @@ final class PCBridgeClient: ObservableObject {
         do {
             let url = baseURL.appending(path: "player")
             let loadedPlayer: BridgePlayer = try await fetchJSON(from: url)
+            let previousPlayerPUUID = player?.puuid
             player = loadedPlayer
             loadFavoriteFriendIDs(for: loadedPlayer.puuid)
-            favoriteFriendRanks = [:]
-            favoriteFriendRankErrors = [:]
+            if previousPlayerPUUID != loadedPlayer.puuid {
+                favoriteFriendRanks = [:]
+                favoriteFriendRankErrors = [:]
+            }
 
             let walletURL = baseURL
                 .appending(path: "wallet")
@@ -668,7 +680,7 @@ final class PCBridgeClient: ObservableObject {
             }
 
             let rankedFriends: BridgeFriends = try await fetchJSON(from: url)
-            var ranks: [String: BridgeFriendMMR] = [:]
+            var ranks = favoriteFriendRanks.filter { favoriteFriendIDs.contains($0.key) }
             var errors: [String: String] = [:]
 
             for friend in rankedFriends.friends {
@@ -795,6 +807,44 @@ struct BridgeLoadout: Decodable {
     let subject: String
     let guns: [BridgeLoadoutGun]
     let identity: BridgeLoadoutIdentity?
+
+    var sections: [BridgeLoadoutSection] {
+        let orderedSections: [(String, (BridgeLoadoutGun) -> Bool)] = [
+            ("Main", { $0.isMainWeapon }),
+            ("Snipers", { $0.categoryKey.contains("sniper") }),
+            ("Rifles", { $0.categoryKey.contains("rifle") && !$0.isMainWeapon }),
+            ("SMGs", { $0.categoryKey.contains("smg") }),
+            ("Sidearms", { $0.categoryKey.contains("sidearm") && !$0.isMainWeapon }),
+            ("Heavy", { $0.categoryKey.contains("heavy") }),
+            ("Shotguns", { $0.categoryKey.contains("shotgun") })
+        ]
+
+        var usedIDs = Set<String>()
+        var sections = orderedSections.compactMap { title, matches -> BridgeLoadoutSection? in
+            let sectionGuns = guns
+                .filter { gun in
+                    matches(gun) && !usedIDs.contains(gun.id)
+                }
+                .sorted { $0.sortName < $1.sortName }
+
+            guard !sectionGuns.isEmpty else {
+                return nil
+            }
+
+            usedIDs.formUnion(sectionGuns.map(\.id))
+            return BridgeLoadoutSection(title: title, guns: sectionGuns)
+        }
+
+        let otherGuns = guns
+            .filter { !usedIDs.contains($0.id) }
+            .sorted { $0.sortName < $1.sortName }
+
+        if !otherGuns.isEmpty {
+            sections.append(BridgeLoadoutSection(title: "Other", guns: otherGuns))
+        }
+
+        return sections
+    }
 }
 
 struct BridgeLoadoutGun: Decodable, Identifiable {
@@ -808,6 +858,19 @@ struct BridgeLoadoutGun: Decodable, Identifiable {
     let skinLevelID: String
     let chromaID: String
     let charmID: String?
+
+    var categoryKey: String {
+        category.lowercased()
+    }
+
+    var sortName: String {
+        weaponName.lowercased()
+    }
+
+    var isMainWeapon: Bool {
+        let weapon = weaponName.lowercased()
+        return weapon == "vandal" || weapon == "phantom" || weapon == "melee" || weapon == "sheriff"
+    }
 }
 
 struct BridgeLoadoutIdentity: Decodable {
@@ -816,6 +879,19 @@ struct BridgeLoadoutIdentity: Decodable {
     let accountLevel: Int
     let preferredLevelBorderID: String?
     let hideAccountLevel: Bool
+}
+
+struct BridgeLoadoutSection: Identifiable {
+    let title: String
+    let guns: [BridgeLoadoutGun]
+
+    var id: String {
+        title
+    }
+
+    var isMain: Bool {
+        title == "Main"
+    }
 }
 
 struct BridgeFriends: Decodable {

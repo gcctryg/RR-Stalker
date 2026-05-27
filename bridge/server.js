@@ -768,7 +768,7 @@ async function withCompetitiveTierAssets(mmrInfo) {
   return {
     ...mmrInfo,
     rankName: tier?.name || (mmrInfo.competitiveTier > 0 ? `Tier ${mmrInfo.competitiveTier}` : "Unrated"),
-    rankIconURL: tier?.smallIcon || tier?.largeIcon || null
+    rankIconURL: tier?.largeIcon || tier?.smallIcon || null
   };
 }
 
@@ -1066,7 +1066,7 @@ async function fetchPlayerMMR(puuid, shard) {
       seasonID: "mock-season",
       hasRank: true,
       rankName: "Platinum 1",
-      rankIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/smallicon.png"
+      rankIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/largeicon.png"
     };
   }
 
