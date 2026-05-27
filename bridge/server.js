@@ -1215,23 +1215,102 @@ async function fetchFriendsMMR(puuids, shard) {
   };
 }
 
-function getLatestCompetitiveInfo(mmr) {
+function normalizeCompetitiveUpdate(update) {
+  return {
+    matchID: update.MatchID || null,
+    matchStartTime: update.MatchStartTime || null,
+    rrChange: update.RankedRatingEarned ?? null,
+    rrPerformanceBonus: update.RankedRatingPerformanceBonus ?? 0,
+    afkPenalty: update.AFKPenalty ?? 0,
+    rankedRatingBefore: update.RankedRatingBeforeUpdate ?? null,
+    rankedRatingAfter: update.RankedRatingAfterUpdate ?? null,
+    tierBefore: update.TierBeforeUpdate ?? null,
+    tierAfter: update.TierAfterUpdate ?? null,
+    seasonID: update.SeasonID || null,
+    mapID: update.MapID || null
+  };
+}
+
+function getActRankWins(season) {
+  const winsByTier = season?.WinsByTier || {};
+
+  return Object.entries(winsByTier)
+    .map(([tier, wins]) => ({
+      tier: Number(tier),
+      wins: Number(wins) || 0
+    }))
+    .filter((entry) => entry.tier > 0 && entry.wins > 0)
+    .sort((a, b) => b.tier - a.tier);
+}
+
+function getActRankBadgeCells(season, maxCells = 9) {
+  const cells = [];
+
+  for (const entry of getActRankWins(season)) {
+    for (let index = 0; index < entry.wins && cells.length < maxCells; index += 1) {
+      cells.push({
+        tier: entry.tier
+      });
+    }
+
+    if (cells.length >= maxCells) {
+      break;
+    }
+  }
+
+  return cells;
+}
+
+function getLatestCompetitiveInfo(mmr, recentCompetitiveUpdates = [], recentCompetitiveUpdatesError = null) {
   const competitive = mmr?.QueueSkills?.competitive;
   const seasons = competitive?.SeasonalInfoBySeasonID || {};
   const latestUpdate = mmr?.LatestCompetitiveUpdate || {};
   const latestSeasonID = latestUpdate.SeasonID;
   const latestSeason = latestSeasonID ? seasons[latestSeasonID] : null;
   const season = latestSeason || Object.values(seasons).at(-1) || {};
+  const lastMatchRRChanges = recentCompetitiveUpdates.length > 0
+    ? recentCompetitiveUpdates.map(normalizeCompetitiveUpdate)
+    : (latestUpdate.MatchID ? [normalizeCompetitiveUpdate(latestUpdate)] : []);
+  const latestRRChange = lastMatchRRChanges[0] || null;
 
   return {
     subject: mmr?.Subject,
-    competitiveTier: latestUpdate.TierAfterUpdate || season.CompetitiveTier || 0,
-    rankedRating: latestUpdate.RankedRatingAfterUpdate || season.RankedRating || 0,
+    competitiveTier: latestUpdate.TierAfterUpdate ?? season.CompetitiveTier ?? 0,
+    rankedRating: latestUpdate.RankedRatingAfterUpdate ?? season.RankedRating ?? 0,
     leaderboardRank: season.LeaderboardRank || 0,
     numberOfWins: season.NumberOfWins || 0,
     seasonID: latestSeasonID || season.SeasonID || "",
-    hasRank: Boolean(latestUpdate.TierAfterUpdate || season.CompetitiveTier)
+    hasRank: Boolean(latestUpdate.TierAfterUpdate || season.CompetitiveTier),
+    lastMatchID: latestRRChange?.matchID || null,
+    lastMatchStartTime: latestRRChange?.matchStartTime || null,
+    lastMatchRRChange: latestRRChange?.rrChange ?? null,
+    lastMatchRRPerformanceBonus: latestRRChange?.rrPerformanceBonus ?? 0,
+    lastMatchAFKPenalty: latestRRChange?.afkPenalty ?? 0,
+    lastMatchRankedRatingBefore: latestRRChange?.rankedRatingBefore ?? null,
+    lastMatchRankedRatingAfter: latestRRChange?.rankedRatingAfter ?? null,
+    lastMatchTierBefore: latestRRChange?.tierBefore ?? null,
+    lastMatchTierAfter: latestRRChange?.tierAfter ?? null,
+    lastMatchRRChanges,
+    lastMatchRRChangesError: recentCompetitiveUpdatesError,
+    actRankWins: getActRankWins(season),
+    actRankBadgeCells: getActRankBadgeCells(season),
+    actRankBadgeHidden: Boolean(mmr?.IsActRankBadgeHidden)
   };
+}
+
+async function fetchCompetitiveUpdates(puuid, shard, limit = 5) {
+  const endIndex = Math.max(1, Math.min(limit, 20));
+  const url = new URL(`https://pd.${shard}.a.pvp.net/mmr/v1/players/${encodeURIComponent(puuid)}/competitiveupdates`);
+  url.searchParams.set("startIndex", "0");
+  url.searchParams.set("endIndex", String(endIndex));
+  url.searchParams.set("queue", "competitive");
+
+  const body = await fetchRiotJSON(url.toString(), {
+    errorMessage: "Riot competitive updates request failed.",
+    errorCode: "riot_competitive_updates_failed"
+  });
+
+  return Array.isArray(body?.Matches) ? body.Matches.slice(0, limit) : [];
 }
 
 async function fetchPlayerMMR(puuid, shard) {
@@ -1245,7 +1324,32 @@ async function fetchPlayerMMR(puuid, shard) {
       seasonID: "mock-season",
       hasRank: true,
       rankName: "Platinum 1",
-      rankIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/largeicon.png"
+      rankIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/largeicon.png",
+      actRankWins: [
+        { tier: 15, wins: 4 },
+        { tier: 14, wins: 3 },
+        { tier: 13, wins: 2 }
+      ],
+      actRankBadgeCells: [
+        { tier: 15 },
+        { tier: 15 },
+        { tier: 15 },
+        { tier: 15 },
+        { tier: 14 },
+        { tier: 14 },
+        { tier: 14 },
+        { tier: 13 },
+        { tier: 13 }
+      ],
+      actRankBadgeHidden: false,
+      lastMatchRRChanges: [
+        { matchID: "mock-match-1", matchStartTime: Date.now() - 3600000, rrChange: 18, rrPerformanceBonus: 3, afkPenalty: 0, rankedRatingBefore: 32, rankedRatingAfter: 50, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-1" },
+        { matchID: "mock-match-2", matchStartTime: Date.now() - 7200000, rrChange: -12, rrPerformanceBonus: 0, afkPenalty: 0, rankedRatingBefore: 44, rankedRatingAfter: 32, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-2" },
+        { matchID: "mock-match-3", matchStartTime: Date.now() - 10800000, rrChange: 22, rrPerformanceBonus: 5, afkPenalty: 0, rankedRatingBefore: 22, rankedRatingAfter: 44, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-3" },
+        { matchID: "mock-match-4", matchStartTime: Date.now() - 14400000, rrChange: 0, rrPerformanceBonus: 0, afkPenalty: 0, rankedRatingBefore: 22, rankedRatingAfter: 22, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-4" },
+        { matchID: "mock-match-5", matchStartTime: Date.now() - 18000000, rrChange: -8, rrPerformanceBonus: 0, afkPenalty: 0, rankedRatingBefore: 30, rankedRatingAfter: 22, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-5" }
+      ],
+      lastMatchRRChangesError: null
     };
   }
 
@@ -1272,12 +1376,22 @@ async function fetchPlayerMMR(puuid, shard) {
     throw error;
   }
 
-  const mmr = await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/mmr/v1/players/${encodeURIComponent(puuid)}`, {
-    errorMessage: "Riot player MMR request failed.",
-    errorCode: "riot_player_mmr_failed"
-  });
+  const [mmr, competitiveUpdatesResult] = await Promise.all([
+    fetchRiotJSON(`https://pd.${shard}.a.pvp.net/mmr/v1/players/${encodeURIComponent(puuid)}`, {
+      errorMessage: "Riot player MMR request failed.",
+      errorCode: "riot_player_mmr_failed"
+    }),
+    fetchCompetitiveUpdates(puuid, shard, 5)
+      .then((updates) => ({ updates, error: null }))
+      .catch((error) => ({
+        updates: [],
+        error: error.body?.message || error.message || "Competitive updates unavailable."
+      }))
+  ]);
 
-  return withCompetitiveTierAssets(getLatestCompetitiveInfo(mmr));
+  return withCompetitiveTierAssets(
+    getLatestCompetitiveInfo(mmr, competitiveUpdatesResult.updates, competitiveUpdatesResult.error)
+  );
 }
 
 async function fetchFirstFriendMMR(shard) {

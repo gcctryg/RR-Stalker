@@ -289,7 +289,13 @@ struct FriendRow: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             HStack(spacing: 12) {
-                RankIconView(mmr: friend.mmr)
+                VStack(spacing: 6) {
+                    RankIconView(mmr: friend.mmr)
+
+                    if let mmr = friend.mmr, mmr.hasRank {
+                        ActRankBadgeView(mmr: mmr)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("\(friend.gameName)#\(friend.tagLine)")
@@ -329,6 +335,12 @@ struct FriendRow: View {
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
+
+                Spacer(minLength: 8)
+
+                if let mmr = friend.mmr, mmr.hasRank {
+                    RRHistoryColumn(mmr: mmr)
+                }
             }
 
             if friend.status?.isOnline == true {
@@ -343,6 +355,121 @@ struct FriendRow: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct ActRankBadgeView: View {
+    let mmr: BridgeFriendMMR
+
+    private let rows = [1, 2, 3, 3]
+
+    var body: some View {
+        Group {
+            if mmr.actRankBadgeHidden {
+                Image(systemName: "eye.slash")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 46, height: 34)
+                    .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityLabel("Act rank hidden")
+            } else if mmr.actRankBadgeCells.isEmpty {
+                Image(systemName: "triangle")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 46, height: 34)
+                    .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityLabel("No act rank wins")
+            } else {
+                VStack(spacing: 2) {
+                    ForEach(rowSlices.indices, id: \.self) { rowIndex in
+                        HStack(spacing: 2) {
+                            ForEach(Array(rowSlices[rowIndex].enumerated()), id: \.offset) { _, cell in
+                                ActRankCellView(cell: cell)
+                            }
+                        }
+                    }
+                }
+                .padding(4)
+                .frame(width: 46, height: 34)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityLabel("Act rank badge")
+            }
+        }
+    }
+
+    private var rowSlices: [[BridgeActRankBadgeCell]] {
+        var remainingCells = Array(mmr.actRankBadgeCells.prefix(9))
+        var rows: [[BridgeActRankBadgeCell]] = []
+
+        for rowSize in self.rows {
+            let rowCells = Array(remainingCells.prefix(rowSize))
+            rows.append(rowCells)
+            remainingCells.removeFirst(min(rowSize, remainingCells.count))
+        }
+
+        return rows.filter { !$0.isEmpty }
+    }
+}
+
+struct ActRankCellView: View {
+    let cell: BridgeActRankBadgeCell
+
+    var body: some View {
+        Triangle()
+            .fill(cell.color)
+            .frame(width: 7, height: 7)
+            .overlay {
+                Triangle()
+                    .stroke(.white.opacity(0.65), lineWidth: 0.5)
+            }
+    }
+}
+
+struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct RRHistoryColumn: View {
+    let mmr: BridgeFriendMMR
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text("Last 5")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if !mmr.lastMatchRRChanges.isEmpty {
+                ForEach(mmr.lastMatchRRChanges.prefix(5)) { rrChange in
+                    Text(rrChange.compactDisplayText)
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(rrChange.tint)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            } else if let lastMatchRRChange = mmr.lastMatchRRChange {
+                Text(mmr.lastMatchRRChangeText)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(lastMatchRRChange >= 0 ? .green : .red)
+                    .lineLimit(1)
+            } else if let lastMatchRRChangesError = mmr.lastMatchRRChangesError {
+                Text("RR failed")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("RR history failed: \(lastMatchRRChangesError)")
+            } else {
+                Text("No RR")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
+        }
+        .frame(width: 92, alignment: .trailing)
     }
 }
 
@@ -1237,6 +1364,39 @@ struct BridgeFriendMMR: Codable {
     let hasRank: Bool
     let rankName: String
     let rankIconURL: URL?
+    let lastMatchID: String?
+    let lastMatchStartTime: Int?
+    let lastMatchRRChange: Int?
+    let lastMatchRRPerformanceBonus: Int
+    let lastMatchAFKPenalty: Int
+    let lastMatchRankedRatingBefore: Int?
+    let lastMatchRankedRatingAfter: Int?
+    let lastMatchTierBefore: Int?
+    let lastMatchTierAfter: Int?
+    let lastMatchRRChanges: [BridgeRRChange]
+    let lastMatchRRChangesError: String?
+    let actRankWins: [BridgeActRankWin]
+    let actRankBadgeCells: [BridgeActRankBadgeCell]
+    let actRankBadgeHidden: Bool
+
+    var lastMatchRRChangeText: String {
+        guard let lastMatchRRChange else {
+            return "Last match RR unavailable"
+        }
+
+        let sign = lastMatchRRChange >= 0 ? "+" : ""
+        var text = "\(sign)\(lastMatchRRChange) RR last match"
+
+        if lastMatchRRPerformanceBonus > 0 {
+            text += " (+\(lastMatchRRPerformanceBonus) bonus)"
+        }
+
+        if lastMatchAFKPenalty > 0 {
+            text += " (-\(lastMatchAFKPenalty) AFK)"
+        }
+
+        return text
+    }
 
     private enum CodingKeys: String, CodingKey {
         case subject
@@ -1248,6 +1408,20 @@ struct BridgeFriendMMR: Codable {
         case hasRank
         case rankName
         case rankIconURL
+        case lastMatchID
+        case lastMatchStartTime
+        case lastMatchRRChange
+        case lastMatchRRPerformanceBonus
+        case lastMatchAFKPenalty
+        case lastMatchRankedRatingBefore
+        case lastMatchRankedRatingAfter
+        case lastMatchTierBefore
+        case lastMatchTierAfter
+        case lastMatchRRChanges
+        case lastMatchRRChangesError
+        case actRankWins
+        case actRankBadgeCells
+        case actRankBadgeHidden
     }
 
     init(from decoder: Decoder) throws {
@@ -1261,6 +1435,140 @@ struct BridgeFriendMMR: Codable {
         hasRank = (try container.decodeIfPresent(Bool.self, forKey: .hasRank)) ?? (competitiveTier > 0)
         rankName = try container.decodeIfPresent(String.self, forKey: .rankName) ?? (competitiveTier > 0 ? "Tier \(competitiveTier)" : "Unrated")
         rankIconURL = try container.decodeIfPresent(URL.self, forKey: .rankIconURL)
+        lastMatchID = try container.decodeIfPresent(String.self, forKey: .lastMatchID)
+        lastMatchStartTime = try container.decodeIfPresent(Int.self, forKey: .lastMatchStartTime)
+        lastMatchRRChange = try container.decodeIfPresent(Int.self, forKey: .lastMatchRRChange)
+        lastMatchRRPerformanceBonus = try container.decodeIfPresent(Int.self, forKey: .lastMatchRRPerformanceBonus) ?? 0
+        lastMatchAFKPenalty = try container.decodeIfPresent(Int.self, forKey: .lastMatchAFKPenalty) ?? 0
+        lastMatchRankedRatingBefore = try container.decodeIfPresent(Int.self, forKey: .lastMatchRankedRatingBefore)
+        lastMatchRankedRatingAfter = try container.decodeIfPresent(Int.self, forKey: .lastMatchRankedRatingAfter)
+        lastMatchTierBefore = try container.decodeIfPresent(Int.self, forKey: .lastMatchTierBefore)
+        lastMatchTierAfter = try container.decodeIfPresent(Int.self, forKey: .lastMatchTierAfter)
+        lastMatchRRChanges = try container.decodeIfPresent([BridgeRRChange].self, forKey: .lastMatchRRChanges) ?? []
+        lastMatchRRChangesError = try container.decodeIfPresent(String.self, forKey: .lastMatchRRChangesError)
+        actRankWins = try container.decodeIfPresent([BridgeActRankWin].self, forKey: .actRankWins) ?? []
+        actRankBadgeCells = try container.decodeIfPresent([BridgeActRankBadgeCell].self, forKey: .actRankBadgeCells) ?? []
+        actRankBadgeHidden = try container.decodeIfPresent(Bool.self, forKey: .actRankBadgeHidden) ?? false
+    }
+}
+
+struct BridgeActRankWin: Codable, Identifiable {
+    let tier: Int
+    let wins: Int
+
+    var id: Int {
+        tier
+    }
+}
+
+struct BridgeActRankBadgeCell: Codable {
+    let tier: Int
+
+    var color: Color {
+        CompetitiveTierColor.color(for: tier)
+    }
+}
+
+enum CompetitiveTierColor {
+    static func color(for tier: Int) -> Color {
+        switch tier {
+        case 3...5:
+            return Color(red: 0.55, green: 0.58, blue: 0.62)
+        case 6...8:
+            return Color(red: 0.74, green: 0.43, blue: 0.26)
+        case 9...11:
+            return Color(red: 0.72, green: 0.78, blue: 0.82)
+        case 12...14:
+            return Color(red: 0.95, green: 0.72, blue: 0.22)
+        case 15...17:
+            return Color(red: 0.20, green: 0.82, blue: 0.78)
+        case 18...20:
+            return Color(red: 0.64, green: 0.43, blue: 0.96)
+        case 21...23:
+            return Color(red: 0.35, green: 0.86, blue: 0.48)
+        case 24...26:
+            return Color(red: 0.86, green: 0.20, blue: 0.32)
+        case 27:
+            return Color(red: 1.0, green: 0.86, blue: 0.35)
+        default:
+            return .secondary
+        }
+    }
+}
+
+struct BridgeRRChange: Codable, Identifiable {
+    let matchID: String?
+    let matchStartTime: Int?
+    let rrChange: Int?
+    let rrPerformanceBonus: Int
+    let afkPenalty: Int
+    let rankedRatingBefore: Int?
+    let rankedRatingAfter: Int?
+    let tierBefore: Int?
+    let tierAfter: Int?
+    let seasonID: String?
+    let mapID: String?
+
+    var id: String {
+        matchID ?? "\(matchStartTime ?? 0)-\(rrChange ?? 0)-\(rankedRatingAfter ?? 0)"
+    }
+
+    var displayText: String {
+        guard let rrChange else {
+            return "RR change unavailable"
+        }
+
+        let sign = rrChange >= 0 ? "+" : ""
+        var text = "\(sign)\(rrChange) RR"
+
+        if let rankedRatingBefore, let rankedRatingAfter {
+            text += " (\(rankedRatingBefore) -> \(rankedRatingAfter))"
+        }
+
+        if rrPerformanceBonus > 0 {
+            text += " +\(rrPerformanceBonus) bonus"
+        }
+
+        if afkPenalty > 0 {
+            text += " -\(afkPenalty) AFK"
+        }
+
+        return text
+    }
+
+    var compactDisplayText: String {
+        guard let rrChange else {
+            return "--"
+        }
+
+        let sign = rrChange >= 0 ? "+" : ""
+        var text = "\(sign)\(rrChange)"
+
+        if rrPerformanceBonus > 0 {
+            text += " B\(rrPerformanceBonus)"
+        }
+
+        if afkPenalty > 0 {
+            text += " A\(afkPenalty)"
+        }
+
+        return text
+    }
+
+    var tint: Color {
+        guard let rrChange else {
+            return .orange
+        }
+
+        if rrChange > 0 {
+            return .green
+        }
+
+        if rrChange < 0 {
+            return .red
+        }
+
+        return .secondary
     }
 }
 
