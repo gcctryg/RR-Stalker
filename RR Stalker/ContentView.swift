@@ -40,8 +40,6 @@ struct LoadoutView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HeaderBanner(bridge: bridge)
-
                 Text("Loadout")
                     .font(.largeTitle.bold())
 
@@ -218,12 +216,6 @@ struct FriendListView: View {
                         .multilineTextAlignment(.center)
                 }
 
-                if let friendCardStatusMessage = bridge.friendCardStatusMessage {
-                    Text(friendCardStatusMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
@@ -281,7 +273,7 @@ struct FriendFavoritePicker: View {
                     Button("Confirm") {
                         Task {
                             await bridge.loadFavoriteFriendRanks()
-                            await bridge.loadFavoriteFriendCards()
+                            await bridge.loadFavoriteFriendStatuses()
                             dismiss()
                         }
                     }
@@ -293,108 +285,64 @@ struct FriendFavoritePicker: View {
 
 struct FriendRow: View {
     let friend: BridgeFriend
-    private var hasCardBackground: Bool {
-        friend.playerCard?.backgroundURL != nil
-    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            RankIconView(mmr: friend.mmr)
+        ZStack(alignment: .topTrailing) {
+            HStack(spacing: 12) {
+                RankIconView(mmr: friend.mmr)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("\(friend.gameName)#\(friend.tagLine)")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(primaryTextStyle)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(friend.gameName)#\(friend.tagLine)")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
 
-                if let mmr = friend.mmr {
-                    Text(mmr.rankName)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(secondaryTextStyle)
-                }
-
-                if let mmr = friend.mmr, mmr.hasRank {
-                    HStack(spacing: 10) {
-                        Text("\(mmr.rankedRating) RR")
-                        Text("\(mmr.numberOfWins) wins")
-                        if mmr.leaderboardRank > 0 {
-                            Text("#\(mmr.leaderboardRank)")
-                        }
+                    if let mmr = friend.mmr {
+                        Text(mmr.rankName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(secondaryTextStyle)
-                } else if friend.mmr != nil {
-                    Text("Unrated")
-                        .font(.caption)
-                        .foregroundStyle(secondaryTextStyle)
-                } else if friend.mmrError != nil {
-                    Text(friend.rankUnavailableText)
-                        .font(.caption)
-                        .foregroundStyle(secondaryTextStyle)
-                }
 
-                Text(friend.puuid)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(tertiaryTextStyle)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
+                    if let mmr = friend.mmr, mmr.hasRank {
+                        HStack(spacing: 10) {
+                            Text("\(mmr.rankedRating) RR")
+                            Text("\(mmr.numberOfWins) wins")
+                            if mmr.leaderboardRank > 0 {
+                                Text("#\(mmr.leaderboardRank)")
+                            }
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    } else if friend.mmr != nil {
+                        Text("Unrated")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if friend.mmrError != nil {
+                        Text(friend.rankUnavailableText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(friend.puuid)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary.opacity(0.72))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+
+            if friend.status?.isOnline == true {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 11, height: 11)
+                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                    .padding(12)
+                    .accessibilityLabel("Online")
             }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            FriendCardBackground(card: friend.playerCard)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .shadow(color: hasCardBackground ? .black.opacity(0.18) : .clear, radius: 1, x: 0, y: 1)
-    }
-
-    private var primaryTextStyle: Color {
-        hasCardBackground ? .white : .primary
-    }
-
-    private var secondaryTextStyle: Color {
-        hasCardBackground ? .white.opacity(0.9) : .secondary
-    }
-
-    private var tertiaryTextStyle: Color {
-        hasCardBackground ? .white.opacity(0.72) : .secondary.opacity(0.72)
-    }
-}
-
-struct FriendCardBackground: View {
-    let card: BridgeFriendCard?
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.thinMaterial)
-
-            if let cardURL = card?.backgroundURL {
-                AsyncImage(url: cardURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .overlay(
-                                LinearGradient(
-                                    colors: [
-                                        .black.opacity(0.72),
-                                        .black.opacity(0.48),
-                                        .black.opacity(0.68)
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                    default:
-                        Color.clear
-                    }
-                }
-            }
-        }
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -614,13 +562,12 @@ final class PCBridgeClient: ObservableObject {
     @Published var favoriteFriendIDs: Set<String>
     @Published var favoriteFriendRanks: [String: BridgeFriendMMR] = [:]
     @Published var favoriteFriendRankErrors: [String: String] = [:]
-    @Published var favoriteFriendCards: [String: BridgeFriendCard] = [:]
+    @Published var favoriteFriendStatuses: [String: BridgeFriendStatus] = [:]
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
     @Published var loadoutErrorMessage: String?
     @Published var friendsErrorMessage: String?
-    @Published var friendCardStatusMessage: String?
     @Published var isLoading = false
 
     // Replace this with your PC's local IP address.
@@ -641,7 +588,7 @@ final class PCBridgeClient: ObservableObject {
                 var favorite = friend
                 favorite.mmr = favoriteFriendRanks[friend.puuid]
                 favorite.mmrError = favoriteFriendRankErrors[friend.puuid]
-                favorite.playerCard = favoriteFriendCards[friend.puuid]
+                favorite.status = favoriteFriendStatuses[friend.puuid]
                 return favorite
             }
     }
@@ -653,7 +600,6 @@ final class PCBridgeClient: ObservableObject {
         storefrontErrorMessage = nil
         loadoutErrorMessage = nil
         friendsErrorMessage = nil
-        friendCardStatusMessage = nil
 
         do {
             let url = baseURL.appending(path: "player")
@@ -664,7 +610,7 @@ final class PCBridgeClient: ObservableObject {
             if previousPlayerPUUID != loadedPlayer.puuid {
                 favoriteFriendRanks = [:]
                 favoriteFriendRankErrors = [:]
-                favoriteFriendCards = [:]
+                favoriteFriendStatuses = [:]
             }
 
             let walletURL = baseURL
@@ -701,7 +647,7 @@ final class PCBridgeClient: ObservableObject {
             do {
                 friends = try await fetchJSON(from: friendsURL)
                 await loadFavoriteFriendRanks()
-                await loadFavoriteFriendCards()
+                await loadFavoriteFriendStatuses()
             } catch {
                 friends = nil
                 friendsErrorMessage = "Player loaded, but friends failed: \(error.localizedDescription)"
@@ -718,7 +664,7 @@ final class PCBridgeClient: ObservableObject {
             favoriteFriendIDs.remove(friend.puuid)
             favoriteFriendRanks.removeValue(forKey: friend.puuid)
             favoriteFriendRankErrors.removeValue(forKey: friend.puuid)
-            favoriteFriendCards.removeValue(forKey: friend.puuid)
+            favoriteFriendStatuses.removeValue(forKey: friend.puuid)
         } else {
             favoriteFriendIDs.insert(friend.puuid)
         }
@@ -732,8 +678,7 @@ final class PCBridgeClient: ObservableObject {
         guard !favoriteFriendIDs.isEmpty else {
             favoriteFriendRanks = [:]
             favoriteFriendRankErrors = [:]
-            favoriteFriendCards = [:]
-            friendCardStatusMessage = nil
+            favoriteFriendStatuses = [:]
             return
         }
 
@@ -772,17 +717,16 @@ final class PCBridgeClient: ObservableObject {
         }
     }
 
-    func loadFavoriteFriendCards() async {
+    func loadFavoriteFriendStatuses() async {
         guard !favoriteFriendIDs.isEmpty else {
-            favoriteFriendCards = [:]
-            friendCardStatusMessage = nil
+            favoriteFriendStatuses = [:]
             return
         }
 
         do {
             let joinedIDs = favoriteFriendIDs.joined(separator: ",")
             var components = URLComponents(
-                url: baseURL.appending(path: "friends/cards"),
+                url: baseURL.appending(path: "friends/status"),
                 resolvingAgainstBaseURL: false
             )
             components?.queryItems = [
@@ -793,17 +737,16 @@ final class PCBridgeClient: ObservableObject {
                 throw BridgeError.invalidResponse
             }
 
-            let cardResponse: BridgeFriendCardsResponse = try await fetchJSON(from: url)
-            var cards = favoriteFriendCards.filter { favoriteFriendIDs.contains($0.key) }
+            let statusResponse: BridgeFriendStatusesResponse = try await fetchJSON(from: url)
+            var statuses = favoriteFriendStatuses.filter { favoriteFriendIDs.contains($0.key) }
 
-            for card in cardResponse.cards {
-                cards[card.puuid] = card
+            for status in statusResponse.statuses {
+                statuses[status.puuid] = status
             }
 
-            favoriteFriendCards = cards
-            friendCardStatusMessage = cardResponse.shortStatusMessage
+            favoriteFriendStatuses = statuses
         } catch {
-            friendCardStatusMessage = "Cards: fetch failed"
+            // Online status is lightweight decoration; keep the last known state on failure.
         }
     }
 
@@ -1012,7 +955,7 @@ struct BridgeFriend: Decodable, Identifiable {
     var mmr: BridgeFriendMMR?
     var mmrError: String?
     var mmrErrorStatus: Int?
-    var playerCard: BridgeFriendCard?
+    var status: BridgeFriendStatus?
 
     var id: String {
         puuid
@@ -1027,61 +970,15 @@ struct BridgeFriend: Decodable, Identifiable {
     }
 }
 
-struct BridgeFriendCardsResponse: Decodable {
-    let cards: [BridgeFriendCard]
-    let missing: [BridgeFriendCardMissing]?
-
-    var shortStatusMessage: String? {
-        guard let missing, !missing.isEmpty else {
-            return nil
-        }
-
-        let grouped = Dictionary(grouping: missing, by: \.shortReason)
-            .mapValues(\.count)
-            .sorted { $0.key < $1.key }
-            .map { reason, count in
-                "\(count) \(reason)"
-            }
-            .joined(separator: ", ")
-
-        return "Cards: \(missing.count) missing (\(grouped))"
-    }
+struct BridgeFriendStatusesResponse: Decodable {
+    let statuses: [BridgeFriendStatus]
 }
 
-struct BridgeFriendCard: Decodable {
+struct BridgeFriendStatus: Decodable {
     let puuid: String
-    let playerCardID: String
-    let displayName: String
-    let displayIcon: URL?
-    let smallArt: URL?
-    let wideArt: URL?
-    let largeArt: URL?
-
-    var backgroundURL: URL? {
-        wideArt ?? largeArt ?? smallArt ?? displayIcon
-    }
-}
-
-struct BridgeFriendCardMissing: Decodable {
-    let puuid: String
-    let reason: String
-
-    var shortReason: String {
-        switch reason {
-        case "player_card_rate_limited":
-            "rate limited"
-        case "presence_not_found":
-            "no presence"
-        case "private_presence_missing_or_invalid":
-            "no private"
-        case "player_card_id_not_found":
-            "no card id"
-        case "player_card_asset_not_found":
-            "no asset"
-        default:
-            reason.replacingOccurrences(of: "_", with: " ")
-        }
-    }
+    let isOnline: Bool
+    let availability: String
+    let product: String
 }
 
 struct BridgeFriendMMR: Decodable {

@@ -87,7 +87,7 @@ curl http://localhost:3000/storefront/mock-puuid
 curl http://localhost:3000/loadout/mock-puuid
 curl http://localhost:3000/friends
 curl "http://localhost:3000/friends/mmr?puuids=mock-puuid"
-curl "http://localhost:3000/friends/cards?puuids=mock-puuid"
+curl "http://localhost:3000/friends/status?puuids=mock-puuid"
 curl http://localhost:3000/friends/first-mmr
 curl http://localhost:3000/parties/mock-party-id/queues
 ```
@@ -208,14 +208,11 @@ endpoint:
 https://valorant-api.com/v1/competitivetiers
 ```
 
-Friend player cards are loaded from local Riot presence data when available:
+Favorite friend online status is loaded from local Riot presence data:
 
 ```text
-GET /friends/cards?puuids=:puuid,:puuid
+GET /friends/status?puuids=:puuid,:puuid
 ```
-
-`playerloadout` only works for your own PUUID, so favorite friend card
-backgrounds use `/chat/v4/presences` when Riot exposes a player card ID there.
 
 The private endpoint:
 

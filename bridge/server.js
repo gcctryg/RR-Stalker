@@ -353,37 +353,6 @@ function normalizeFriendsBody(body) {
     .filter((friend) => friend.puuid || friend.gameName !== "Unknown" || friend.tagLine);
 }
 
-function decodePresencePrivate(privateValue) {
-  if (!privateValue || typeof privateValue !== "string") {
-    return null;
-  }
-
-  try {
-    return JSON.parse(Buffer.from(privateValue, "base64").toString("utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function findPlayerCardID(value) {
-  if (!value || typeof value !== "object") {
-    return "";
-  }
-
-  for (const [key, childValue] of Object.entries(value)) {
-    if (/player.?card/i.test(key) && typeof childValue === "string") {
-      return childValue;
-    }
-
-    const nestedValue = findPlayerCardID(childValue);
-    if (nestedValue) {
-      return nestedValue;
-    }
-  }
-
-  return "";
-}
-
 async function fetchLocalPresences() {
   if (!riotClientPort && !valorantRemotingPort) {
     const error = new Error("Start the bridge with start-bridge.ps1 to load Riot presences.");
@@ -440,19 +409,16 @@ async function fetchLocalPresences() {
   throw error;
 }
 
-async function fetchFriendsCards(puuids) {
+async function fetchFriendsStatus(puuids) {
   const uniquePUUIDs = [...new Set(puuids.map((puuid) => puuid.trim()).filter(Boolean))];
 
   if (useMocks) {
     return {
-      cards: uniquePUUIDs.map((puuid) => ({
+      statuses: uniquePUUIDs.map((puuid, index) => ({
         puuid,
-        playerCardID: "mock-card",
-        displayName: "Mock Card",
-        displayIcon: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/displayicon.png",
-        smallArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/smallart.png",
-        wideArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/wideart.png",
-        largeArt: "https://media.valorant-api.com/playercards/9fb348bc-41a0-91ad-8a3e-818035c4e561/largeart.png"
+        isOnline: index % 2 === 0,
+        availability: index % 2 === 0 ? "chat" : "offline",
+        product: index % 2 === 0 ? "valorant" : ""
       })),
       missing: [],
       source: "mock",
@@ -468,50 +434,32 @@ async function fetchFriendsCards(puuids) {
       .map((presence) => [presence.puuid, presence])
   );
   const missing = [];
-  const cards = await Promise.all(uniquePUUIDs.map(async (puuid) => {
+  const statuses = uniquePUUIDs.map((puuid) => {
     const presence = presenceByPUUID.get(puuid);
 
     if (!presence) {
       missing.push({ puuid, reason: "presence_not_found" });
-      return null;
-    }
-
-    const privatePresence = decodePresencePrivate(presence.private);
-    if (!privatePresence) {
-      missing.push({ puuid, reason: "private_presence_missing_or_invalid" });
-      return null;
-    }
-
-    const playerCardID = findPlayerCardID(privatePresence);
-    if (!playerCardID) {
-      missing.push({ puuid, reason: "player_card_id_not_found" });
-      return null;
-    }
-
-    const cardResult = await fetchPlayerCard(playerCardID);
-    const card = cardResult.card;
-    if (!card) {
-      missing.push({
+      return {
         puuid,
-        reason: cardResult.errorStatus === 429 ? "player_card_rate_limited" : "player_card_asset_not_found",
-        playerCardID,
-        httpStatus: cardResult.errorStatus || null
-      });
+        isOnline: false,
+        availability: "offline",
+        product: ""
+      };
     }
+
+    const availability = presence.availability || "";
+    const product = presence.product || "";
 
     return {
       puuid,
-      playerCardID,
-      displayName: card?.displayName || "",
-      displayIcon: card?.displayIcon || null,
-      smallArt: card?.smallArt || null,
-      wideArt: card?.wideArt || null,
-      largeArt: card?.largeArt || null
+      isOnline: availability.toLowerCase() !== "offline",
+      availability,
+      product
     };
-  }));
+  });
 
   return {
-    cards: cards.filter((card) => card?.playerCardID),
+    statuses,
     missing,
     source,
     presenceCount: presences.length
@@ -786,7 +734,6 @@ function getRiotHeaders() {
 const skinLevelCache = new Map();
 const skinChromaCache = new Map();
 const skinCache = new Map();
-const playerCardCache = new Map();
 const weaponAssetCache = {
   loadedAt: 0,
   weaponsByID: new Map(),
@@ -893,41 +840,6 @@ function getSkinByID(skinID) {
 
 function firstURL(...urls) {
   return urls.find((url) => typeof url === "string" && url.length > 0) || null;
-}
-
-async function fetchPlayerCard(cardID) {
-  if (!cardID) {
-    return {
-      card: null,
-      errorStatus: null,
-      usedCache: false
-    };
-  }
-
-  if (playerCardCache.has(cardID)) {
-    return {
-      card: playerCardCache.get(cardID),
-      errorStatus: null,
-      usedCache: true
-    };
-  }
-
-  const result = await fetchValorantAPIJSON(
-    `https://valorant-api.com/v1/playercards/${encodeURIComponent(cardID)}`,
-    `playercard-${cardID}`,
-    { returnMeta: true }
-  );
-  const card = result.body?.data || null;
-
-  if (card) {
-    playerCardCache.set(cardID, card);
-  }
-
-  return {
-    card,
-    errorStatus: result.errorStatus,
-    usedCache: result.usedCache
-  };
 }
 
 function normalizeWeaponCategory(category) {
@@ -1478,14 +1390,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (requestURL.pathname === "/friends/cards") {
+  if (requestURL.pathname === "/friends/status") {
     try {
       const puuids = (requestURL.searchParams.get("puuids") || "").split(",");
-      const result = await fetchFriendsCards(puuids);
+      const result = await fetchFriendsStatus(puuids);
       sendJSON(res, 200, result);
     } catch (error) {
       sendJSON(res, error.statusCode || 500, {
-        error: error.code || "friends_cards_error",
+        error: error.code || "friends_status_error",
         message: error.message,
         details: error.body
       });
@@ -1523,7 +1435,7 @@ const server = http.createServer(async (req, res) => {
       "GET /loadout/:puuid",
       "GET /friends",
       "GET /friends/mmr?puuids=:puuid,:puuid",
-      "GET /friends/cards?puuids=:puuid,:puuid",
+      "GET /friends/status?puuids=:puuid,:puuid",
       "GET /friends/first-mmr",
       "GET /mmr/:puuid",
       "GET /parties/:partyID/queues"
