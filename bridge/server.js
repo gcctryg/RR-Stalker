@@ -892,7 +892,9 @@ async function fetchCompetitiveTierAssets() {
     tiers.set(tier.tier, {
       name: formatRankName(tier.tierName),
       smallIcon: tier.smallIcon || null,
-      largeIcon: tier.largeIcon || tier.smallIcon || null
+      largeIcon: tier.largeIcon || tier.smallIcon || null,
+      rankTriangleDownIcon: tier.rankTriangleDownIcon || null,
+      rankTriangleUpIcon: tier.rankTriangleUpIcon || null
     });
   }
 
@@ -936,11 +938,21 @@ function formatRankName(rankName) {
 async function withCompetitiveTierAssets(mmrInfo) {
   const tiers = await fetchCompetitiveTierAssets();
   const tier = tiers.get(mmrInfo.competitiveTier);
+  const actRankBadgeCells = (mmrInfo.actRankBadgeCells || []).map((cell) => {
+    const cellTier = tiers.get(cell.tier);
+
+    return {
+      ...cell,
+      rankTriangleDownIconURL: cellTier?.rankTriangleDownIcon || null,
+      rankTriangleUpIconURL: cellTier?.rankTriangleUpIcon || null
+    };
+  });
 
   return {
     ...mmrInfo,
     rankName: tier?.name || (mmrInfo.competitiveTier > 0 ? `Tier ${mmrInfo.competitiveTier}` : "Unrated"),
-    rankIconURL: tier?.largeIcon || tier?.smallIcon || null
+    rankIconURL: tier?.largeIcon || tier?.smallIcon || null,
+    actRankBadgeCells
   };
 }
 
@@ -1243,7 +1255,7 @@ function getActRankWins(season) {
     .sort((a, b) => b.tier - a.tier);
 }
 
-function getActRankBadgeCells(season, maxCells = 9) {
+function getActRankBadgeCells(season, maxCells = 100) {
   const cells = [];
 
   for (const entry of getActRankWins(season)) {
@@ -1326,20 +1338,26 @@ async function fetchPlayerMMR(puuid, shard) {
       rankName: "Platinum 1",
       rankIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/largeicon.png",
       actRankWins: [
-        { tier: 15, wins: 4 },
-        { tier: 14, wins: 3 },
-        { tier: 13, wins: 2 }
+        { tier: 15, wins: 18 },
+        { tier: 14, wins: 12 },
+        { tier: 13, wins: 6 }
       ],
       actRankBadgeCells: [
-        { tier: 15 },
-        { tier: 15 },
-        { tier: 15 },
-        { tier: 15 },
-        { tier: 14 },
-        { tier: 14 },
-        { tier: 14 },
-        { tier: 13 },
-        { tier: 13 }
+        ...Array.from({ length: 18 }, () => ({
+          tier: 15,
+          rankTriangleDownIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/ranktriangledownicon.png",
+          rankTriangleUpIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/ranktriangleupicon.png"
+        })),
+        ...Array.from({ length: 12 }, () => ({
+          tier: 14,
+          rankTriangleDownIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/14/ranktriangledownicon.png",
+          rankTriangleUpIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/14/ranktriangleupicon.png"
+        })),
+        ...Array.from({ length: 6 }, () => ({
+          tier: 13,
+          rankTriangleDownIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/13/ranktriangledownicon.png",
+          rankTriangleUpIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/13/ranktriangleupicon.png"
+        }))
       ],
       actRankBadgeHidden: false,
       lastMatchRRChanges: [

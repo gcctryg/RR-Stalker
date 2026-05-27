@@ -3,6 +3,7 @@ param(
     [string]$LockfilePath = "",
     [string]$HostAddress = "",
     [int]$BridgePort = 0,
+    [switch]$NoKillExistingBridge,
     [switch]$PrintTokens
 )
 
@@ -68,6 +69,28 @@ function Get-ValorantRemotingInfo {
     }
 
     return $null
+}
+
+function Stop-ExistingBridgeListener {
+    param([int]$Port)
+
+    $connections = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+
+    foreach ($connection in $connections) {
+        $process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
+
+        if (-not $process) {
+            continue
+        }
+
+        if ($process.ProcessName -in @("node", "nodejs")) {
+            Write-Host "Stopping existing bridge listener on port $Port (PID $($process.Id))."
+            Stop-Process -Id $process.Id -Force
+            Start-Sleep -Milliseconds 500
+        } else {
+            throw "Port $Port is already used by $($process.ProcessName) (PID $($process.Id)). Stop it or pass -BridgePort with another port."
+        }
+    }
 }
 
 $resolvedLockfilePath = Get-RiotClientLockfilePath -ExplicitPath $LockfilePath
@@ -146,6 +169,18 @@ if ($HostAddress) {
 
 if ($BridgePort -gt 0) {
     $env:PORT = "$BridgePort"
+}
+
+$effectiveBridgePort = if ($BridgePort -gt 0) {
+    $BridgePort
+} elseif ($env:PORT) {
+    [int]$env:PORT
+} else {
+    3000
+}
+
+if (-not $NoKillExistingBridge) {
+    Stop-ExistingBridgeListener -Port $effectiveBridgePort
 }
 
 Write-Host "Loaded Riot tokens from local client."

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import Foundation
 
 struct ContentView: View {
     @StateObject private var bridge = PCBridgeClient()
@@ -169,59 +170,66 @@ struct FriendListView: View {
     @State private var isSelectingFavorites = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Friends")
-                        .font(.largeTitle.bold())
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("Friends")
+                            .font(.largeTitle.bold())
 
-                    Spacer()
+                        Spacer()
 
-                    Button {
-                        isSelectingFavorites = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .frame(width: 24, height: 24)
+                        Button {
+                            isSelectingFavorites = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Select favorite friends")
                     }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Select favorite friends")
-                }
 
-                if bridge.favoriteFriends.isEmpty {
-                    ContentUnavailableView(
-                        "No Favorite Friends",
-                        systemImage: "star",
-                        description: Text("Tap plus to choose friends whose ranks you want to track.")
-                    )
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(bridge.favoriteFriends) { friend in
-                            FriendRow(friend: friend)
+                    if bridge.favoriteFriends.isEmpty {
+                        ContentUnavailableView(
+                            "No Favorite Friends",
+                            systemImage: "star",
+                            description: Text("Tap plus to choose friends whose ranks you want to track.")
+                        )
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(bridge.favoriteFriends) { friend in
+                                NavigationLink {
+                                    FriendCareerSummaryView(friend: friend)
+                                } label: {
+                                    FriendRow(friend: friend)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
-                }
 
-                if let friends = bridge.friends, friends.friends.isEmpty {
+                    if let friends = bridge.friends, friends.friends.isEmpty {
                         ContentUnavailableView(
                             "No Friends Loaded",
                             systemImage: "person.2.slash",
                             description: Text("Refresh the current player data to load your friend list.")
                         )
-                }
+                    }
 
-                if let friendsErrorMessage = bridge.friendsErrorMessage {
-                    Text(friendsErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                }
+                    if let friendsErrorMessage = bridge.friendsErrorMessage {
+                        Text(friendsErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                    }
 
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-        }
-        .sheet(isPresented: $isSelectingFavorites) {
-            FriendFavoritePicker(bridge: bridge)
+            .sheet(isPresented: $isSelectingFavorites) {
+                FriendFavoritePicker(bridge: bridge)
+            }
         }
     }
 }
@@ -291,10 +299,6 @@ struct FriendRow: View {
             HStack(spacing: 12) {
                 VStack(spacing: 6) {
                     RankIconView(mmr: friend.mmr)
-
-                    if let mmr = friend.mmr, mmr.hasRank {
-                        ActRankBadgeView(mmr: mmr)
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -358,79 +362,410 @@ struct FriendRow: View {
     }
 }
 
-struct ActRankBadgeView: View {
-    let mmr: BridgeFriendMMR
-
-    private let rows = [1, 2, 3, 3]
+struct FriendCareerSummaryView: View {
+    let friend: BridgeFriend
 
     var body: some View {
-        Group {
-            if mmr.actRankBadgeHidden {
-                Image(systemName: "eye.slash")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 46, height: 34)
-                    .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-                    .accessibilityLabel("Act rank hidden")
-            } else if mmr.actRankBadgeCells.isEmpty {
-                Image(systemName: "triangle")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 46, height: 34)
-                    .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-                    .accessibilityLabel("No act rank wins")
-            } else {
-                VStack(spacing: 2) {
-                    ForEach(rowSlices.indices, id: \.self) { rowIndex in
-                        HStack(spacing: 2) {
-                            ForEach(Array(rowSlices[rowIndex].enumerated()), id: \.offset) { _, cell in
-                                ActRankCellView(cell: cell)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    RankIconView(mmr: friend.mmr)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("\(friend.gameName)#\(friend.tagLine)")
+                            .font(.title2.weight(.bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+
+                        if let mmr = friend.mmr {
+                            Text(mmr.rankName)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+                }
+
+                if let mmr = friend.mmr, mmr.hasRank {
+                    HStack(spacing: 14) {
+                        CareerMetricView(title: "RR", value: "\(mmr.rankedRating)")
+                        CareerMetricView(title: "Wins", value: "\(mmr.numberOfWins)")
+                        if mmr.leaderboardRank > 0 {
+                            CareerMetricView(title: "Rank", value: "#\(mmr.leaderboardRank)")
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Act Rank")
+                            .font(.headline)
+
+                        HStack(alignment: .bottom, spacing: 18) {
+                            ActRankCareerPreview(title: "25 Wins", mmr: mmr, mode: .compact)
+                            ActRankCareerPreview(title: "100 Wins", mmr: mmr, mode: .full)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Recent RR")
+                            .font(.headline)
+
+                        if mmr.lastMatchRRChanges.isEmpty {
+                            Text("No recent RR changes")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(mmr.lastMatchRRChanges.prefix(5)) { rrChange in
+                                HStack {
+                                    Text(rrChange.compactDisplayText)
+                                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                                        .foregroundStyle(rrChange.tint)
+
+                                    Spacer()
+
+                                    if let tierAfter = rrChange.tierAfter {
+                                        Text("Tier \(tierAfter)")
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
                     }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                } else if let error = friend.mmrError {
+                    ContentUnavailableView(
+                        "Career Unavailable",
+                        systemImage: "chart.line.uptrend.xyaxis",
+                        description: Text(error)
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Career Not Loaded",
+                        systemImage: "chart.line.uptrend.xyaxis",
+                        description: Text("Refresh friend ranks to load this player's career summary.")
+                    )
                 }
-                .padding(4)
-                .frame(width: 46, height: 34)
-                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                .accessibilityLabel("Act rank badge")
+            }
+            .padding()
+        }
+        .navigationTitle("Career Summary")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct CareerMetricView: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.headline.monospacedDigit())
+        }
+        .frame(minWidth: 72, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct ActRankCareerPreview: View {
+    let title: String
+    let mmr: BridgeFriendMMR
+    let mode: ActRankBadgeMode
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ActRankBadgeView(mmr: mmr, mode: mode)
+
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+enum ActRankBadgeMode: CaseIterable {
+    case peak
+    case compact
+    case full
+
+    var title: String {
+        switch self {
+        case .peak:
+            return "Peak"
+        case .compact:
+            return "25"
+        case .full:
+            return "100"
+        }
+    }
+
+    var badgeSize: CGSize {
+        switch self {
+        case .peak:
+            return CGSize(width: 54, height: 54)
+        case .compact:
+            return CGSize(width: 82, height: 74)
+        case .full:
+            return CGSize(width: 112, height: 100)
+        }
+    }
+
+    var innerScale: CGSize {
+        switch self {
+        case .peak:
+            return CGSize(width: 0.46, height: 0.42)
+        case .compact:
+            return CGSize(width: 0.74, height: 0.64)
+        case .full:
+            return CGSize(width: 0.76, height: 0.66)
+        }
+    }
+
+    func rowSizes(for winCount: Int) -> [Int] {
+        switch self {
+        case .peak:
+            return [1]
+        case .compact:
+            return [1, 3, 5, 7, 9]
+        case .full:
+            return (0..<10).map { rowIndex in
+                rowIndex * 2 + 1
+            }
+        }
+    }
+}
+
+struct ActRankDevelopmentBadgeBox: View {
+    let mmr: BridgeFriendMMR
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 12) {
+            ForEach(ActRankBadgeMode.allCases, id: \.self) { mode in
+                VStack(spacing: 2) {
+                    ActRankBadgeView(mmr: mmr, mode: mode)
+
+                    Text(mode.title)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityLabel("Act rank development badge states")
+    }
+}
+
+struct ActRankBadgeView: View {
+    let mmr: BridgeFriendMMR
+    let mode: ActRankBadgeMode
+
+    private var badgeWidth: CGFloat {
+        mode.badgeSize.width
+    }
+
+    private var badgeHeight: CGFloat {
+        mode.badgeSize.height
+    }
+
+    var body: some View {
+        ZStack {
+            ActRankFrame()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.50, green: 0.52, blue: 0.56),
+                            Color(red: 0.18, green: 0.20, blue: 0.24)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay {
+                    ActRankFrame()
+                        .stroke(.white.opacity(0.4), lineWidth: 1)
+                }
+
+            ActRankMeshView(cells: displayCells, rowSizes: rowSizes)
+                .frame(width: badgeWidth * mode.innerScale.width, height: badgeHeight * mode.innerScale.height)
+                .offset(y: badgeHeight * 0.06)
+                .clipShape(ActRankFrame(insetScale: 0))
+        }
+        .frame(width: badgeWidth, height: badgeHeight)
+        .accessibilityLabel("Act rank badge")
+    }
+
+    private var displayCells: [BridgeActRankBadgeCell] {
+        switch mode {
+        case .peak:
+            return Array(mmr.actRankBadgeCells.prefix(1))
+        case .compact, .full:
+            return Array(mmr.actRankBadgeCells.prefix(rowSizes.reduce(0, +)))
+        }
+    }
+
+    private var rowSizes: [Int] {
+        mode.rowSizes(for: mmr.actRankBadgeCells.count)
+    }
+}
+
+struct ActRankMeshView: View {
+    let cells: [BridgeActRankBadgeCell]
+    let rowSizes: [Int]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let slices = rowSlices
+            let baseCount = CGFloat(max(rowSizes.last ?? 1, 1))
+            let rowCount = CGFloat(max(rowSizes.count, 1))
+            let cellWidth = geometry.size.width / baseCount
+            let cellHeight = geometry.size.height / rowCount
+            let overlap: CGFloat = 0.38
+            let xStep = cellWidth * (1 - overlap)
+            let yStep = cellHeight * 0.72
+
+            ZStack {
+                ForEach(slices.indices, id: \.self) { rowIndex in
+                    ForEach(Array(slices[rowIndex].enumerated()), id: \.offset) { columnIndex, cell in
+                        let rowWidth = xStep * CGFloat(rowSizes[rowIndex] - 1) + cellWidth
+                        let meshHeight = yStep * CGFloat(max(rowSizes.count - 1, 0)) + cellHeight
+                        let x = geometry.size.width / 2 - rowWidth / 2 + cellWidth / 2 + xStep * CGFloat(columnIndex)
+                        let y = geometry.size.height / 2 - meshHeight / 2 + cellHeight / 2 + yStep * CGFloat(rowIndex)
+
+                        ActRankCellView(
+                            cell: cell,
+                            pointsUp: columnIndex.isMultiple(of: 2),
+                            width: cellWidth,
+                            height: cellHeight
+                        )
+                        .position(x: x, y: y)
+                    }
+                }
             }
         }
     }
 
-    private var rowSlices: [[BridgeActRankBadgeCell]] {
-        var remainingCells = Array(mmr.actRankBadgeCells.prefix(9))
-        var rows: [[BridgeActRankBadgeCell]] = []
+    private var rowSlices: [[BridgeActRankBadgeCell?]] {
+        var remainingCells = Array(cells.prefix(rowSizes.reduce(0, +)))
+        var rows: [[BridgeActRankBadgeCell?]] = []
 
-        for rowSize in self.rows {
-            let rowCells = Array(remainingCells.prefix(rowSize))
+        for rowSize in rowSizes {
+            var rowCells: [BridgeActRankBadgeCell?] = Array(remainingCells.prefix(rowSize))
+            if rowCells.count < rowSize {
+                rowCells.append(contentsOf: Array(repeating: nil, count: rowSize - rowCells.count))
+            }
             rows.append(rowCells)
             remainingCells.removeFirst(min(rowSize, remainingCells.count))
         }
 
-        return rows.filter { !$0.isEmpty }
+        return rows
     }
 }
 
 struct ActRankCellView: View {
-    let cell: BridgeActRankBadgeCell
+    let cell: BridgeActRankBadgeCell?
+    let pointsUp: Bool
+    let width: CGFloat
+    let height: CGFloat
 
     var body: some View {
-        Triangle()
-            .fill(cell.color)
-            .frame(width: 7, height: 7)
-            .overlay {
-                Triangle()
-                    .stroke(.white.opacity(0.65), lineWidth: 0.5)
+        Group {
+            if cell == nil {
+                Color.clear
+            } else {
+                if let iconURL {
+                    AsyncImage(url: iconURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        default:
+                            fallbackTriangle
+                        }
+                    }
+                } else {
+                    fallbackTriangle
+                }
             }
+        }
+        .frame(width: width, height: height)
+        .shadow(color: shadowColor, radius: 0.8, y: 0.4)
+    }
+
+    private var iconURL: URL? {
+        guard let cell else {
+            return nil
+        }
+
+        return pointsUp ? cell.rankTriangleUpIconURL : cell.rankTriangleDownIconURL
+    }
+
+    private var fallbackTriangle: some View {
+        Triangle(pointsUp: pointsUp)
+            .fill(fillColor)
+            .overlay {
+                Triangle(pointsUp: pointsUp)
+                    .stroke(strokeColor, lineWidth: 0.45)
+            }
+    }
+
+    private var fillColor: Color {
+        cell?.color ?? Color(red: 0.13, green: 0.15, blue: 0.18)
+    }
+
+    private var strokeColor: Color {
+        cell == nil ? .white.opacity(0.12) : .white.opacity(0.45)
+    }
+
+    private var shadowColor: Color {
+        cell?.color.opacity(0.28) ?? .clear
+    }
+}
+
+struct ActRankFrame: Shape {
+    var insetScale: CGFloat = 0.08
+
+    func path(in rect: CGRect) -> Path {
+        let inset = min(rect.width, rect.height) * insetScale
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - inset))
+        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY - inset))
+        path.closeSubpath()
+        return path
     }
 }
 
 struct Triangle: Shape {
+    var pointsUp = true
+
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+
+        if pointsUp {
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        } else {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        }
+
         path.closeSubpath()
         return path
     }
@@ -1463,6 +1798,8 @@ struct BridgeActRankWin: Codable, Identifiable {
 
 struct BridgeActRankBadgeCell: Codable {
     let tier: Int
+    let rankTriangleDownIconURL: URL?
+    let rankTriangleUpIconURL: URL?
 
     var color: Color {
         CompetitiveTierColor.color(for: tier)
