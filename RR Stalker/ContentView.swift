@@ -37,6 +37,7 @@ struct ContentView: View {
 
 struct LoadoutView: View {
     @ObservedObject var bridge: PCBridgeClient
+    @State private var selectedGun: BridgeLoadoutGun?
 
     var body: some View {
         ScrollView {
@@ -59,7 +60,12 @@ struct LoadoutView: View {
                                     spacing: 12
                                 ) {
                                     ForEach(section.guns) { gun in
-                                        LoadoutWeaponCard(gun: gun)
+                                        Button {
+                                            selectedGun = gun
+                                        } label: {
+                                            LoadoutWeaponCard(gun: gun)
+                                        }
+                                        .buttonStyle(.plain)
                                     }
                                 }
                             }
@@ -85,6 +91,9 @@ struct LoadoutView: View {
                 }
             }
             .padding()
+        }
+        .sheet(item: $selectedGun) { gun in
+            LoadoutSkinPickerView(bridge: bridge, gun: gun)
         }
     }
 }
@@ -1252,6 +1261,185 @@ struct LoadoutWeaponCard: View {
     }
 }
 
+struct LoadoutSkinPickerView: View {
+    @ObservedObject var bridge: PCBridgeClient
+    @Environment(\.dismiss) private var dismiss
+    let gun: BridgeLoadoutGun
+
+    @State private var inventory: BridgeOwnedWeaponSkins?
+    @State private var selectedSkin: BridgeOwnedWeaponSkin?
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+    @State private var isEquipping = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let inventory {
+                    if inventory.skins.isEmpty {
+                        ContentUnavailableView(
+                            "No Owned Skins",
+                            systemImage: "scope",
+                            description: Text("No owned skins were returned for \(gun.weaponName).")
+                        )
+                    } else {
+                        List(inventory.skins) { skin in
+                            Button {
+                                selectedSkin = skin
+                            } label: {
+                                LoadoutSkinRow(
+                                    skin: skin,
+                                    isSelected: selectedSkin?.id == skin.id,
+                                    isEquipped: skin.isEquipped
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .listStyle(.plain)
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Skins Not Loaded",
+                        systemImage: "scope",
+                        description: Text("Pull to load owned skins.")
+                    )
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                }
+
+                Button {
+                    Task {
+                        await equipSelectedSkin()
+                    }
+                } label: {
+                    if isEquipping {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text(equipButtonTitle)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(equipButtonDisabled)
+                .padding()
+            }
+            .navigationTitle(gun.weaponName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                await loadSkins()
+            }
+        }
+    }
+
+    private var equipButtonTitle: String {
+        guard let selectedSkin else {
+            return "Select a Skin"
+        }
+
+        return selectedSkin.isEquipped ? "Equipped" : "Equip"
+    }
+
+    private var equipButtonDisabled: Bool {
+        selectedSkin == nil || selectedSkin?.isEquipped == true || isEquipping
+    }
+
+    private func loadSkins() async {
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let loadedInventory = try await bridge.loadOwnedWeaponSkins(for: gun)
+            inventory = loadedInventory
+            selectedSkin = loadedInventory.skins.first(where: \.isEquipped) ?? loadedInventory.skins.first
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func equipSelectedSkin() async {
+        guard let skinToEquip = selectedSkin else {
+            return
+        }
+
+        isEquipping = true
+        errorMessage = nil
+
+        do {
+            try await bridge.equipWeaponSkin(skinToEquip, for: gun)
+            inventory = try await bridge.loadOwnedWeaponSkins(for: gun)
+            selectedSkin = inventory?.skins.first(where: \.isEquipped) ?? skinToEquip
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isEquipping = false
+    }
+}
+
+struct LoadoutSkinRow: View {
+    let skin: BridgeOwnedWeaponSkin
+    let isSelected: Bool
+    let isEquipped: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: skin.iconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                default:
+                    Image(systemName: "scope")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 74, height: 48)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(skin.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+
+                Text(isEquipped ? "Equipped" : "Owned")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if isEquipped {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else if isSelected {
+                Image(systemName: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
 @MainActor
 final class PCBridgeClient: ObservableObject {
     private let favoriteFriendIDsKeyPrefix = "favoriteFriendIDs"
@@ -1275,9 +1463,10 @@ final class PCBridgeClient: ObservableObject {
     @Published var isServerOnline = false
     @Published var lastFetchedAt: Date?
 
-    // Replace this with your PC's local IP address.
-    //let baseURL = URL(string: "http://192.168.0.14:3000")!
-    let baseURL = URL(string: "http://100.114.128.21:3000")!
+    // Tailscale IP for the PC bridge.
+    //let baseURL = URL(string: "http://100.114.128.21:3000")!
+    //ip for home
+    let baseURL = URL(string: "http://192.168.0.14:3000")!
 
     init() {
         favoriteFriendIDs = []
@@ -1476,6 +1665,40 @@ final class PCBridgeClient: ObservableObject {
         }
     }
 
+    func loadOwnedWeaponSkins(for gun: BridgeLoadoutGun) async throws -> BridgeOwnedWeaponSkins {
+        guard let player else {
+            throw BridgeError.invalidResponse
+        }
+
+        let url = baseURL
+            .appending(path: "loadout")
+            .appending(path: player.puuid)
+            .appending(path: "skins")
+            .appending(path: gun.id)
+
+        return try await fetchJSON(from: url)
+    }
+
+    func equipWeaponSkin(_ skin: BridgeOwnedWeaponSkin, for gun: BridgeLoadoutGun) async throws {
+        guard let player else {
+            throw BridgeError.invalidResponse
+        }
+
+        let url = baseURL
+            .appending(path: "loadout")
+            .appending(path: player.puuid)
+            .appending(path: "equip")
+        let body = BridgeEquipWeaponSkinRequest(
+            weaponID: gun.id,
+            skinID: skin.skinID,
+            skinLevelID: skin.skinLevelID,
+            chromaID: skin.chromaID
+        )
+        let updatedLoadout: BridgeLoadout = try await sendJSON(to: url, method: "PUT", body: body)
+        loadout = updatedLoadout
+        saveCachedSnapshot()
+    }
+
     private func checkHealth() async throws {
         let healthURL = baseURL.appending(path: "health")
         let _: BridgeHealth = try await fetchJSON(from: healthURL, timeout: 2)
@@ -1542,6 +1765,23 @@ final class PCBridgeClient: ObservableObject {
 
     private func fetchJSON<T: Decodable>(from url: URL, timeout: TimeInterval = 15) async throws -> T {
         let request = URLRequest(url: url, timeoutInterval: timeout)
+        return try await perform(request)
+    }
+
+    private func sendJSON<Body: Encodable, Response: Decodable>(
+        to url: URL,
+        method: String,
+        body: Body,
+        timeout: TimeInterval = 20
+    ) async throws -> Response {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await perform(request)
+    }
+
+    private func perform<T: Decodable>(_ request: URLRequest) async throws -> T {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -1550,7 +1790,7 @@ final class PCBridgeClient: ObservableObject {
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let responseBody = String(data: data, encoding: .utf8)
-            throw BridgeError.badStatus(httpResponse.statusCode, url, responseBody)
+            throw BridgeError.badStatus(httpResponse.statusCode, request.url ?? URL(string: "about:blank")!, responseBody)
         }
 
         return try JSONDecoder().decode(T.self, from: data)
@@ -1723,6 +1963,31 @@ struct BridgeLoadoutGun: Codable, Identifiable {
         let weapon = weaponName.lowercased()
         return weapon == "vandal" || weapon == "phantom" || weapon == "melee" || weapon == "sheriff"
     }
+}
+
+struct BridgeOwnedWeaponSkins: Codable {
+    let weaponID: String
+    let weaponName: String
+    let equippedSkinID: String
+    let skins: [BridgeOwnedWeaponSkin]
+}
+
+struct BridgeOwnedWeaponSkin: Codable, Identifiable {
+    let id: String
+    let weaponID: String
+    let name: String
+    let iconURL: URL?
+    let skinID: String
+    let skinLevelID: String
+    let chromaID: String
+    let isEquipped: Bool
+}
+
+struct BridgeEquipWeaponSkinRequest: Encodable {
+    let weaponID: String
+    let skinID: String
+    let skinLevelID: String
+    let chromaID: String
 }
 
 struct BridgeLoadoutIdentity: Codable {

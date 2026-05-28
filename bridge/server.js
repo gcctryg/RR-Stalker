@@ -23,6 +23,10 @@ const valorantRemotingPort = process.env.VALORANT_REMOTING_PORT || "";
 const valorantRemotingAuthToken = process.env.VALORANT_REMOTING_AUTH_TOKEN || "";
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
 const cacheDirectory = path.join(__dirname, ".cache");
+const itemTypeIDs = {
+  skins: "e7c63390-eda7-46e0-bb7a-a6abdacd2433",
+  skinVariants: "3ad1b2b2-acdb-4524-852f-954a76ddae0a"
+};
 const authState = {
   accessToken: initialValorantAccessToken,
   entitlementsToken: initialValorantEntitlementsToken,
@@ -40,9 +44,41 @@ function sendJSON(res, statusCode, body) {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type, X-RR-Bridge-Key",
-    "Access-Control-Allow-Methods": "GET, OPTIONS"
+    "Access-Control-Allow-Methods": "GET, PUT, OPTIONS"
   });
   res.end(payload);
+}
+
+function readJSONBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 1000000) {
+        reject(new Error("Request body is too large."));
+        req.destroy();
+      }
+    });
+
+    req.on("end", () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        const error = new Error("Request body must be valid JSON.");
+        error.statusCode = 400;
+        error.code = "invalid_json";
+        reject(error);
+      }
+    });
+
+    req.on("error", reject);
+  });
 }
 
 function requireBridgeKey(req, res) {
@@ -731,6 +767,31 @@ function requireMatchingPUUID(puuid) {
   throw error;
 }
 
+async function ensureRiotReady(shard, purpose) {
+  await refreshAuthState();
+
+  if (!shard) {
+    const error = new Error(`Set VALORANT_SHARD or pass ?shard=na to use ${purpose}.`);
+    error.statusCode = 400;
+    error.code = "missing_shard";
+    throw error;
+  }
+
+  if (!isValidShard(shard)) {
+    const error = new Error("Shard may only contain letters, numbers, and hyphens.");
+    error.statusCode = 400;
+    error.code = "invalid_shard";
+    throw error;
+  }
+
+  if (!authState.accessToken || !authState.entitlementsToken) {
+    const error = new Error("Set VALORANT_ACCESS_TOKEN and VALORANT_ENTITLEMENTS_TOKEN.");
+    error.statusCode = 503;
+    error.code = "missing_riot_credentials";
+    throw error;
+  }
+}
+
 function getRiotHeaders() {
   const headers = {
     Authorization: `Bearer ${normalizeBearerToken(authState.accessToken)}`,
@@ -1241,6 +1302,210 @@ async function fetchPlayerLoadout(puuid, shard) {
   };
 }
 
+async function fetchRawPlayerLoadout(puuid, shard) {
+  await ensureRiotReady(shard, "player loadout");
+  requireMatchingPUUID(puuid);
+
+  return fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
+    errorMessage: "Riot player loadout request failed.",
+    errorCode: "riot_player_loadout_failed"
+  });
+}
+
+async function fetchOwnedItemIDs(puuid, shard, itemTypeID) {
+  await ensureRiotReady(shard, "owned items");
+  requireMatchingPUUID(puuid);
+
+  const body = await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/store/v1/entitlements/${encodeURIComponent(puuid)}/${itemTypeID}`, {
+    errorMessage: "Riot owned items request failed.",
+    errorCode: "riot_owned_items_failed"
+  });
+  const entitlements = Array.isArray(body?.Entitlements)
+    ? body.Entitlements
+    : Array.isArray(body?.EntitlementsByTypes)
+      ? body.EntitlementsByTypes.flatMap((entry) => entry.Entitlements || [])
+      : Object.values(body?.EntitlementsByTypes || {}).flatMap((entry) => entry.Entitlements || entry || []);
+
+  return new Set(entitlements.map((item) => item.ItemID).filter(Boolean));
+}
+
+function skinIsOwned(skin, ownedSkinIDs, ownedVariantIDs, currentGun) {
+  return (
+    ownedSkinIDs.has(skin?.uuid) ||
+    (skin?.levels || []).some((level) => ownedSkinIDs.has(level.uuid)) ||
+    (skin?.chromas || []).some((chroma) => ownedVariantIDs.has(chroma.uuid)) ||
+    currentGun?.SkinID === skin?.uuid
+  );
+}
+
+function getSkinEquipDefaults(skin, ownedSkinIDs, ownedVariantIDs, currentGun) {
+  const levels = Array.isArray(skin?.levels) ? skin.levels : [];
+  const chromas = Array.isArray(skin?.chromas) ? skin.chromas : [];
+  const ownedLevel = [...levels].reverse().find((level) => ownedSkinIDs.has(level.uuid));
+  const defaultLevel = ownedLevel || levels[0] || {};
+  const ownedChroma = chromas.find((chroma) => ownedVariantIDs.has(chroma.uuid));
+  const defaultChroma = chromas.find((chroma) => chroma.uuid === skin?.uuid) || chromas[0] || {};
+
+  return {
+    skinID: skin?.uuid || "",
+    skinLevelID: currentGun?.SkinID === skin?.uuid ? currentGun.SkinLevelID : defaultLevel.uuid || "",
+    chromaID: currentGun?.SkinID === skin?.uuid ? currentGun.ChromaID : ownedChroma?.uuid || defaultChroma.uuid || ""
+  };
+}
+
+async function fetchOwnedWeaponSkins(puuid, shard, weaponID) {
+  if (useMocks) {
+    return {
+      weaponID,
+      skins: []
+    };
+  }
+
+  await ensureRiotReady(shard, "owned weapon skins");
+  requireMatchingPUUID(puuid);
+
+  const [loadout, weaponAssets, ownedSkinIDs, ownedVariantIDs] = await Promise.all([
+    fetchRawPlayerLoadout(puuid, shard),
+    fetchWeaponAssets(),
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.skins),
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.skinVariants)
+  ]);
+  const weapon = weaponAssets.weaponsByID.get(weaponID);
+  const currentGun = (loadout.Guns || []).find((gun) => gun.ID === weaponID) || null;
+
+  if (!weapon) {
+    const error = new Error("Weapon was not found in Valorant-API assets.");
+    error.statusCode = 404;
+    error.code = "weapon_not_found";
+    throw error;
+  }
+
+  const skins = (weapon.skins || [])
+    .filter((skin) => skinIsOwned(skin, ownedSkinIDs, ownedVariantIDs, currentGun))
+    .map((skin) => {
+      const defaults = getSkinEquipDefaults(skin, ownedSkinIDs, ownedVariantIDs, currentGun);
+      const level = (skin.levels || []).find((item) => item.uuid === defaults.skinLevelID) || (skin.levels || [])[0] || {};
+      const chroma = (skin.chromas || []).find((item) => item.uuid === defaults.chromaID) || (skin.chromas || [])[0] || {};
+
+      return {
+        id: skin.uuid,
+        weaponID,
+        name: skin.displayName || weapon.displayName || skin.uuid,
+        iconURL: firstURL(level.displayIcon, chroma.fullRender, chroma.displayIcon, skin.displayIcon, weapon.displayIcon),
+        skinID: defaults.skinID,
+        skinLevelID: defaults.skinLevelID,
+        chromaID: defaults.chromaID,
+        isEquipped: currentGun?.SkinID === skin.uuid
+      };
+    })
+    .sort((a, b) => {
+      if (a.isEquipped !== b.isEquipped) {
+        return a.isEquipped ? -1 : 1;
+      }
+
+      return a.name.localeCompare(b.name);
+    });
+
+  return {
+    weaponID,
+    weaponName: weapon.displayName || weaponID,
+    equippedSkinID: currentGun?.SkinID || "",
+    skins
+  };
+}
+
+async function fetchOwnedItemsDebug(puuid, shard) {
+  await ensureRiotReady(shard, "owned items debug");
+  requireMatchingPUUID(puuid);
+
+  const [weaponAssets, ownedSkinIDs, ownedVariantIDs] = await Promise.all([
+    fetchWeaponAssets(),
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.skins),
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.skinVariants)
+  ]);
+
+  return {
+    skinCount: ownedSkinIDs.size,
+    variantCount: ownedVariantIDs.size,
+    skinIDs: Array.from(ownedSkinIDs).sort(),
+    variantIDs: Array.from(ownedVariantIDs).sort(),
+    ownedWeaponSkins: Array.from(weaponAssets.weaponsByID.values()).map((weapon) => ({
+      weaponID: weapon.uuid,
+      weaponName: weapon.displayName || weapon.uuid,
+      skins: (weapon.skins || [])
+        .filter((skin) => skinIsOwned(skin, ownedSkinIDs, ownedVariantIDs, null))
+        .map((skin) => ({
+          name: skin.displayName || skin.uuid,
+          skinID: skin.uuid,
+          levelIDs: (skin.levels || []).map((level) => level.uuid),
+          chromaIDs: (skin.chromas || []).map((chroma) => chroma.uuid)
+        }))
+    })).filter((weapon) => weapon.skins.length > 0)
+  };
+}
+
+async function equipWeaponSkin(puuid, shard, body) {
+  if (useMocks) {
+    return getMockLoadout(puuid);
+  }
+
+  await ensureRiotReady(shard, "set player loadout");
+  requireMatchingPUUID(puuid);
+
+  const weaponID = body.weaponID || body.id;
+  const skinID = body.skinID;
+  const skinLevelID = body.skinLevelID;
+  const chromaID = body.chromaID;
+
+  if (!weaponID || !skinID || !skinLevelID || !chromaID) {
+    const error = new Error("weaponID, skinID, skinLevelID, and chromaID are required.");
+    error.statusCode = 400;
+    error.code = "missing_loadout_fields";
+    throw error;
+  }
+
+  const loadout = await fetchRawPlayerLoadout(puuid, shard);
+  const gun = (loadout.Guns || []).find((item) => item.ID === weaponID);
+
+  if (!gun) {
+    const error = new Error("Weapon was not found in current loadout.");
+    error.statusCode = 404;
+    error.code = "loadout_weapon_not_found";
+    throw error;
+  }
+
+  const nextLoadout = {
+    Guns: (loadout.Guns || []).map((item) => {
+      if (item.ID !== weaponID) {
+        return item;
+      }
+
+      return {
+        ...item,
+        SkinID: skinID,
+        SkinLevelID: skinLevelID,
+        ChromaID: chromaID,
+        Attachments: item.Attachments || []
+      };
+    }),
+    Sprays: loadout.Sprays || [],
+    Identity: loadout.Identity || {},
+    Incognito: Boolean(loadout.Incognito)
+  };
+
+  await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(nextLoadout),
+    errorMessage: "Riot set player loadout request failed.",
+    errorCode: "riot_set_loadout_failed"
+  });
+
+  return fetchPlayerLoadout(puuid, shard);
+}
+
 async function enrichFriendsWithMMR(friends, shard) {
   const results = [];
   const concurrency = 4;
@@ -1580,10 +1845,15 @@ const server = http.createServer(async (req, res) => {
   const requestURL = new URL(req.url, `http://${req.headers.host}`);
   const pathParts = requestURL.pathname.split("/").filter(Boolean);
 
-  if (req.method !== "GET") {
+  if (req.method === "OPTIONS") {
+    sendJSON(res, 200, { ok: true });
+    return;
+  }
+
+  if (!["GET", "PUT"].includes(req.method)) {
     sendJSON(res, 405, {
       error: "method_not_allowed",
-      message: "Only GET requests are supported right now."
+      message: "Only GET and PUT requests are supported right now."
     });
     return;
   }
@@ -1644,7 +1914,53 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathParts[0] === "loadout" && pathParts[1]) {
+  if (req.method === "GET" && pathParts[0] === "loadout" && pathParts[1] && pathParts[2] === "skins" && pathParts[3]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const skins = await fetchOwnedWeaponSkins(pathParts[1], shard, pathParts[3]);
+      sendJSON(res, 200, skins);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "owned_weapon_skins_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && pathParts[0] === "loadout" && pathParts[1] && pathParts[2] === "owned-debug") {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const ownedItems = await fetchOwnedItemsDebug(pathParts[1], shard);
+      sendJSON(res, 200, ownedItems);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "owned_items_debug_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
+  if (req.method === "PUT" && pathParts[0] === "loadout" && pathParts[1] && pathParts[2] === "equip") {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const body = await readJSONBody(req);
+      const loadout = await equipWeaponSkin(pathParts[1], shard, body);
+      sendJSON(res, 200, loadout);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "equip_weapon_skin_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && pathParts[0] === "loadout" && pathParts[1]) {
     try {
       const shard = requestURL.searchParams.get("shard") || valorantShard;
       const loadout = await fetchPlayerLoadout(pathParts[1], shard);
@@ -1747,6 +2063,8 @@ const server = http.createServer(async (req, res) => {
       "GET /wallet/:puuid",
       "GET /storefront/:puuid",
       "GET /loadout/:puuid",
+      "GET /loadout/:puuid/skins/:weaponID",
+      "PUT /loadout/:puuid/equip",
       "GET /friends",
       "GET /friends/mmr?puuids=:puuid,:puuid",
       "GET /friends/status?puuids=:puuid,:puuid",
