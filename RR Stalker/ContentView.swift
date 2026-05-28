@@ -14,9 +14,14 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            LoadoutView(bridge: bridge)
+            ProfileView(bridge: bridge)
                 .tabItem {
-                    Label("Loadout", systemImage: "scope")
+                    Label("Profile", systemImage: "person.crop.circle")
+                }
+
+            CollectionsView(bridge: bridge)
+                .tabItem {
+                    Label("Collections", systemImage: "square.grid.2x2")
                 }
 
             FriendListView(bridge: bridge)
@@ -24,9 +29,9 @@ struct ContentView: View {
                     Label("Friends", systemImage: "person.2")
                 }
 
-            ProfileView(bridge: bridge)
+            EsportView()
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle")
+                    Label("eSport", systemImage: "trophy")
                 }
         }
         .task {
@@ -46,30 +51,8 @@ struct LoadoutView: View {
                     .font(.largeTitle.bold())
 
                 if let loadout = bridge.loadout, !loadout.guns.isEmpty {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ForEach(loadout.sections) { section in
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(section.title)
-                                    .font(section.isMain ? .title3.bold() : .headline)
-
-                                LazyVGrid(
-                                    columns: [
-                                        GridItem(.flexible(), spacing: 12),
-                                        GridItem(.flexible(), spacing: 12)
-                                    ],
-                                    spacing: 12
-                                ) {
-                                    ForEach(section.guns) { gun in
-                                        Button {
-                                            selectedGun = gun
-                                        } label: {
-                                            LoadoutWeaponCard(gun: gun)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
+                    LoadoutOverview(loadout: loadout) { gun in
+                        selectedGun = gun
                     }
                 } else if bridge.isLoading {
                     ProgressView()
@@ -98,78 +81,118 @@ struct LoadoutView: View {
     }
 }
 
+struct CollectionsView: View {
+    @ObservedObject var bridge: PCBridgeClient
+    @State private var selectedGun: BridgeLoadoutGun?
+    @State private var isShowingSkins = true
+    @State private var isShowingSprays = false
+    @State private var isShowingCards = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Collections")
+                        .font(.largeTitle.bold())
+
+                    DisclosureGroup(isExpanded: $isShowingSkins) {
+                        if let loadout = bridge.loadout, !loadout.guns.isEmpty {
+                            LoadoutOverview(loadout: loadout) { gun in
+                                selectedGun = gun
+                            }
+                            .padding(.top, 12)
+                        } else {
+                            CollectionEmptyState(title: "No skins loaded", systemImage: "scope")
+                                .padding(.top, 12)
+                        }
+                    } label: {
+                        CollectionSectionLabel(title: "Skins", systemImage: "scope")
+                    }
+                    .collectionDisclosureStyle()
+
+                    DisclosureGroup(isExpanded: $isShowingSprays) {
+                        CollectionAssetGrid(items: bridge.collections?.sprays ?? [], emptyTitle: "No sprays loaded")
+                            .padding(.top, 12)
+                    } label: {
+                        CollectionSectionLabel(title: "Sprays", systemImage: "paintpalette")
+                    }
+                    .collectionDisclosureStyle()
+
+                    DisclosureGroup(isExpanded: $isShowingCards) {
+                        CollectionAssetGrid(items: bridge.collections?.playerCards ?? [], emptyTitle: "No player cards loaded")
+                            .padding(.top, 12)
+                    } label: {
+                        CollectionSectionLabel(title: "Player Cards", systemImage: "rectangle.portrait")
+                    }
+                    .collectionDisclosureStyle()
+
+                    if let loadoutErrorMessage = bridge.loadoutErrorMessage {
+                        Text(loadoutErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if let collectionsErrorMessage = bridge.collectionsErrorMessage {
+                        Text(collectionsErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding()
+            }
+            .sheet(item: $selectedGun) { gun in
+                LoadoutSkinPickerView(bridge: bridge, gun: gun)
+            }
+        }
+    }
+}
+
 struct ProfileView: View {
     @ObservedObject var bridge: PCBridgeClient
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HeaderBanner(bridge: bridge)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ProfileNavigationHeader(bridge: bridge)
 
-                if let player = bridge.player {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Player")
-                            .font(.headline)
+                    WalletSummaryCard(wallet: bridge.wallet)
 
-                        InfoRow(title: "Name", value: "\(player.gameName)#\(player.tagLine)")
-                        InfoRow(title: "Level", value: "\(player.level)")
-                        InfoRow(title: "PUUID", value: player.puuid)
-
-                        if let wallet = bridge.wallet {
-                            Divider()
-                            Text("Wallet")
-                                .font(.headline)
-
-                            ForEach(wallet.items) { item in
-                                InfoRow(title: item.name, value: "\(item.amount)")
-                            }
-                        }
+                    if let storefront = bridge.storefront {
+                        ShopSection(storefront: storefront)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                }
 
-                if let storefront = bridge.storefront {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Current Shop")
-                                .font(.headline)
-                            Spacer()
-                            Text(storefront.remainingTimeText)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-
-                        ForEach(storefront.offers) { offer in
-                            ShopOfferRow(offer: offer)
-                        }
+                    if let errorMessage = bridge.errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
 
-                if let errorMessage = bridge.errorMessage {
-                    Text(errorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                }
+                    if let walletErrorMessage = bridge.walletErrorMessage {
+                        Text(walletErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                    }
 
-                if let walletErrorMessage = bridge.walletErrorMessage {
-                    Text(walletErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
+                    if let storefrontErrorMessage = bridge.storefrontErrorMessage {
+                        Text(storefrontErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                    }
                 }
-
-                if let storefrontErrorMessage = bridge.storefrontErrorMessage {
-                    Text(storefrontErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                }
+                .padding()
             }
-            .padding()
+        }
+    }
+}
+
+struct EsportView: View {
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView("eSport", systemImage: "trophy", description: Text("This tab is empty for now."))
         }
     }
 }
@@ -942,13 +965,19 @@ struct RankIconView: View {
 }
 
 struct SettingsView: View {
+    @ObservedObject var bridge: PCBridgeClient
+
     var body: some View {
         NavigationStack {
             List {
                 Section("Bridge") {
-                    Text("Update the PC bridge URL in ContentView.swift when your PC IP changes.")
+                    Text(bridge.baseURL.absoluteString)
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+
+                    Text(bridge.isServerOnline ? "Server Online" : "Server Offline")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(bridge.isServerOnline ? .green : .red)
                 }
             }
             .navigationTitle("Settings")
@@ -978,6 +1007,80 @@ struct ServerStatusPill: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(.thinMaterial, in: Capsule())
+    }
+}
+
+struct ProfileNavigationHeader: View {
+    @ObservedObject var bridge: PCBridgeClient
+    @State private var isShowingSettings = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Button {
+                    Task {
+                        await bridge.loadPlayer()
+                    }
+                } label: {
+                    ZStack {
+                        Image(systemName: "arrow.clockwise")
+                            .opacity(bridge.isLoading ? 0 : 1)
+
+                        if bridge.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                    .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(bridge.isLoading)
+                .accessibilityLabel(bridge.isLoading ? "Loading player data" : "Refresh player data")
+
+                Circle()
+                    .fill(bridge.isServerOnline ? .green : .red)
+                    .frame(width: 12, height: 12)
+                    .accessibilityLabel(bridge.isServerOnline ? "Server online" : "Server offline")
+            }
+            .frame(width: 82, alignment: .leading)
+
+            VStack(spacing: 3) {
+                if let player = bridge.player {
+                    Text("\(player.gameName)#\(player.tagLine)")
+                        .font(.headline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+
+                    Text("Level \(player.level)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("RR Stalker")
+                        .font(.headline.weight(.semibold))
+
+                    Text(bridge.isServerOnline ? "Player not loaded" : "Server offline")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            Button {
+                isShowingSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .frame(width: 82, alignment: .trailing)
+            .accessibilityLabel("Settings")
+        }
+        .padding(.vertical, 10)
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsView(bridge: bridge)
+        }
     }
 }
 
@@ -1041,8 +1144,130 @@ struct HeaderBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .sheet(isPresented: $isShowingSettings) {
-            SettingsView()
+            SettingsView(bridge: bridge)
         }
+    }
+}
+
+struct WalletSummaryCard: View {
+    let wallet: BridgeWallet?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(BridgeWalletItem.orderedCurrencyPlaceholders(wallet: wallet)) { item in
+                WalletCurrencyView(item: item)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct WalletCurrencyView: View {
+    let item: BridgeWalletItem
+
+    var body: some View {
+        VStack(spacing: 8) {
+            AsyncImage(url: item.iconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                default:
+                    Image(systemName: item.fallbackSystemImage)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 32, height: 32)
+
+            Text("\(item.amount)")
+                .font(.headline.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Text(item.shortName)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct CollectionSectionLabel: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.headline)
+            .foregroundStyle(.primary)
+    }
+}
+
+struct CollectionAssetGrid: View {
+    let items: [BridgeCollectionItem]
+    let emptyTitle: String
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 96), spacing: 12)
+    ]
+
+    var body: some View {
+        if items.isEmpty {
+            CollectionEmptyState(title: emptyTitle, systemImage: "square.grid.2x2")
+        } else {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(items) { item in
+                    VStack(spacing: 8) {
+                        AsyncImage(url: item.iconURL) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .scaledToFit()
+                            default:
+                                Image(systemName: "photo")
+                                    .font(.system(size: 28, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(height: 72)
+
+                        Text(item.name)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+}
+
+struct CollectionEmptyState: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+    }
+}
+
+extension View {
+    func collectionDisclosureStyle() -> some View {
+        padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -1062,33 +1287,63 @@ struct InfoRow: View {
     }
 }
 
-struct ShopOfferRow: View {
-    let offer: BridgeStorefrontOffer
+struct ShopSection: View {
+    let storefront: BridgeStorefront
     @State private var isRevealed = false
 
     var body: some View {
-        Button {
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
-                isRevealed.toggle()
-            }
-        } label: {
-            ZStack {
-                if isRevealed {
-                    revealedContent
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.92).combined(with: .opacity),
-                            removal: .scale(scale: 1.04).combined(with: .opacity)
-                        ))
-                } else {
-                    hiddenContent
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.96).combined(with: .opacity),
-                            removal: .scale(scale: 0.92).combined(with: .opacity)
-                        ))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text("Shop")
+                    .font(.headline)
+
+                Text(storefront.remainingTimeText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                        isRevealed.toggle()
+                    }
+                } label: {
+                    Image(systemName: isRevealed ? "eye.slash" : "eye")
+                        .frame(width: 30, height: 30)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel(isRevealed ? "Hide all shop offers" : "Reveal all shop offers")
+            }
+
+            ForEach(storefront.offers) { offer in
+                ShopOfferRow(offer: offer, isRevealed: isRevealed)
             }
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ShopOfferRow: View {
+    let offer: BridgeStorefrontOffer
+    let isRevealed: Bool
+
+    var body: some View {
+        ZStack {
+            if isRevealed {
+                revealedContent
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.92).combined(with: .opacity),
+                        removal: .scale(scale: 1.04).combined(with: .opacity)
+                    ))
+            } else {
+                hiddenContent
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.96).combined(with: .opacity),
+                        removal: .scale(scale: 0.92).combined(with: .opacity)
+                    ))
+            }
+        }
         .padding()
         .background {
             RoundedRectangle(cornerRadius: 8)
@@ -1098,9 +1353,8 @@ struct ShopOfferRow: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(cardBorderColor, lineWidth: 1)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(isRevealed ? "\(offer.name), \(offer.price) VP" : "Hidden shop offer")
-        .accessibilityHint(isRevealed ? "Tap to hide this offer" : "Tap to reveal this offer")
     }
 
     private var revealedContent: some View {
@@ -1119,59 +1373,56 @@ struct ShopOfferRow: View {
             }
 
             Spacer()
-
-            Image(systemName: "eye.slash")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
         }
         .frame(minHeight: 58)
     }
 
     private var hiddenContent: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(tierColor.opacity(0.24))
-
-                if let tierIconURL = offer.contentTierIconURL {
-                    AsyncImage(url: tierIconURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        default:
-                            Image(systemName: "questionmark")
-                                .font(.title2.weight(.semibold))
-                                .foregroundStyle(tierColor)
-                        }
-                    }
-                    .frame(width: 28, height: 28)
-                } else {
-                    Image(systemName: "questionmark")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(tierColor)
-                }
-            }
-            .frame(width: 86, height: 58)
-
             VStack(alignment: .leading, spacing: 6) {
                 Text(offer.contentTierName ?? "Hidden Offer")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
 
-                Text("Tap to reveal")
+                Text("Reveal shop to view")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            Image(systemName: "eye")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            ZStack {
+                Circle()
+                    .fill(.white.opacity(0.18))
+
+                tierIcon
+            }
+            .frame(width: 46, height: 46)
         }
         .frame(minHeight: 58)
+    }
+
+    @ViewBuilder
+    private var tierIcon: some View {
+        if let tierIconURL = offer.contentTierIconURL {
+            AsyncImage(url: tierIconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                default:
+                    Image(systemName: "questionmark")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(8)
+        } else {
+            Image(systemName: "questionmark")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+        }
     }
 
     private var tierColor: Color {
@@ -1215,8 +1466,114 @@ struct ShopOfferImage: View {
     }
 }
 
+struct LoadoutOverview: View {
+    let loadout: BridgeLoadout
+    let onSelect: (BridgeLoadoutGun) -> Void
+
+    private let twoColumns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            mainWeaponsSection
+            sniperSection
+            weaponSection(title: "SMGs", guns: loadout.guns(named: ["Stinger", "Spectre"]))
+            weaponSection(title: "Shotguns", guns: loadout.guns(named: ["Bucky", "Judge"]))
+            weaponSection(title: "Rifles", guns: loadout.guns(named: ["Bulldog", "Guardian"]))
+            weaponSection(title: "Heavy", guns: loadout.guns(named: ["Ares", "Odin"]))
+            weaponSection(title: "Sidearms", guns: loadout.guns(named: ["Classic", "Shorty", "Frenzy", "Ghost", "Sheriff"]))
+        }
+    }
+
+    private var mainWeaponsSection: some View {
+        LoadoutSectionContainer(title: "Main Weapons") {
+            LazyVGrid(columns: twoColumns, spacing: 12) {
+                ForEach(loadout.guns(named: ["Vandal", "Phantom"])) { gun in
+                    loadoutButton(gun, style: .square)
+                }
+            }
+
+            if let melee = loadout.gun(named: "Melee") {
+                loadoutButton(melee, style: .rectangle)
+            }
+        }
+    }
+
+    private var sniperSection: some View {
+        LoadoutSectionContainer(title: "Snipers") {
+            LazyVGrid(columns: twoColumns, spacing: 12) {
+                ForEach(loadout.guns(named: ["Marshal", "Outlaw"])) { gun in
+                    loadoutButton(gun, style: .square)
+                }
+            }
+
+            if let operatorGun = loadout.gun(named: "Operator") {
+                loadoutButton(operatorGun, style: .rectangle)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func weaponSection(title: String, guns: [BridgeLoadoutGun]) -> some View {
+        if !guns.isEmpty {
+            LoadoutSectionContainer(title: title) {
+                LazyVGrid(columns: twoColumns, spacing: 12) {
+                    ForEach(guns) { gun in
+                        loadoutButton(gun, style: .square)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadoutButton(_ gun: BridgeLoadoutGun, style: LoadoutWeaponCardStyle) -> some View {
+        Button {
+            onSelect(gun)
+        } label: {
+            LoadoutWeaponCard(gun: gun, style: style)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct LoadoutSectionContainer<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+
+            content
+        }
+    }
+}
+
+enum LoadoutWeaponCardStyle {
+    case square
+    case rectangle
+
+    var imageHeight: CGFloat {
+        switch self {
+        case .square:
+            return 96
+        case .rectangle:
+            return 126
+        }
+    }
+}
+
 struct LoadoutWeaponCard: View {
     let gun: BridgeLoadoutGun
+    var style: LoadoutWeaponCardStyle = .square
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1236,23 +1593,18 @@ struct LoadoutWeaponCard: View {
                 .padding(8)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 96)
+            .frame(height: style.imageHeight)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(gun.weaponName)
+                Text(gun.displayWeaponName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                Text(gun.skinName)
+                Text(gun.displaySkinName)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
-
-                Text(gun.category)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1449,6 +1801,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var wallet: BridgeWallet?
     @Published var storefront: BridgeStorefront?
     @Published var loadout: BridgeLoadout?
+    @Published var collections: BridgeCollections?
     @Published var friends: BridgeFriends?
     @Published var favoriteFriendIDs: Set<String>
     @Published var favoriteFriendRanks: [String: BridgeFriendMMR] = [:]
@@ -1458,6 +1811,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
     @Published var loadoutErrorMessage: String?
+    @Published var collectionsErrorMessage: String?
     @Published var friendsErrorMessage: String?
     @Published var isLoading = false
     @Published var isServerOnline = false
@@ -1505,6 +1859,7 @@ final class PCBridgeClient: ObservableObject {
         walletErrorMessage = nil
         storefrontErrorMessage = nil
         loadoutErrorMessage = nil
+        collectionsErrorMessage = nil
         friendsErrorMessage = nil
 
         do {
@@ -1522,6 +1877,7 @@ final class PCBridgeClient: ObservableObject {
                 wallet = nil
                 storefront = nil
                 loadout = nil
+                collections = nil
                 friends = nil
             }
 
@@ -1550,6 +1906,15 @@ final class PCBridgeClient: ObservableObject {
                 loadout = try await fetchJSON(from: loadoutURL)
             } catch {
                 loadoutErrorMessage = "Player loaded, but loadout failed: \(error.localizedDescription)"
+            }
+
+            let collectionsURL = baseURL
+                .appending(path: "collections")
+                .appending(path: loadedPlayer.puuid)
+            do {
+                collections = try await fetchJSON(from: collectionsURL)
+            } catch {
+                collectionsErrorMessage = "Player loaded, but collections failed: \(error.localizedDescription)"
             }
 
             let friendsURL = baseURL.appending(path: "friends")
@@ -1715,6 +2080,7 @@ final class PCBridgeClient: ObservableObject {
         wallet = snapshot.wallet
         storefront = snapshot.storefront
         loadout = snapshot.loadout
+        collections = snapshot.collections
         friends = snapshot.friends
         favoriteFriendRanks = snapshot.favoriteFriendRanks
         favoriteFriendRankErrors = snapshot.favoriteFriendRankErrors
@@ -1733,6 +2099,7 @@ final class PCBridgeClient: ObservableObject {
             wallet: wallet,
             storefront: storefront,
             loadout: loadout,
+            collections: collections,
             friends: friends,
             favoriteFriendRanks: favoriteFriendRanks,
             favoriteFriendRankErrors: favoriteFriendRankErrors,
@@ -1807,6 +2174,7 @@ struct BridgeCachedSnapshot: Codable {
     let wallet: BridgeWallet?
     let storefront: BridgeStorefront?
     let loadout: BridgeLoadout?
+    let collections: BridgeCollections?
     let friends: BridgeFriends?
     let favoriteFriendRanks: [String: BridgeFriendMMR]
     let favoriteFriendRankErrors: [String: String]
@@ -1839,6 +2207,13 @@ struct BridgeWallet: Codable {
             .sorted { $0.name < $1.name }
     }
 
+    var orderedItems: [BridgeWalletItem] {
+        BridgeWalletItem.currencyOrder.map { currency in
+            let amount = balances[currency.id] ?? balances[currency.id.uppercased()] ?? 0
+            return BridgeWalletItem(currency: currency, amount: amount)
+        }
+    }
+
     private static func currencyName(for id: String) -> String? {
         switch id.lowercased() {
         case "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741":
@@ -1857,6 +2232,71 @@ struct BridgeWalletItem: Identifiable {
     let id: String
     let name: String
     let amount: Int
+
+    var shortName: String {
+        switch id.lowercased() {
+        case Self.valorantPointsID:
+            return "VP"
+        case Self.radianiteID:
+            return "Radianite"
+        case Self.kingdomCreditsID:
+            return "Kingdom"
+        default:
+            return name
+        }
+    }
+
+    var iconURL: URL? {
+        URL(string: "https://media.valorant-api.com/currencies/\(id.lowercased())/displayicon.png")
+    }
+
+    var fallbackSystemImage: String {
+        switch id.lowercased() {
+        case Self.valorantPointsID:
+            return "v.circle.fill"
+        case Self.radianiteID:
+            return "r.circle.fill"
+        case Self.kingdomCreditsID:
+            return "k.circle.fill"
+        default:
+            return "circle.fill"
+        }
+    }
+
+    init(id: String, name: String, amount: Int) {
+        self.id = id
+        self.name = name
+        self.amount = amount
+    }
+
+    init(currency: BridgeWalletCurrency, amount: Int) {
+        self.id = currency.id
+        self.name = currency.name
+        self.amount = amount
+    }
+
+    static let valorantPointsID = "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+    static let radianiteID = "e59aa87c-4cbf-517a-5983-6e81511be9b7"
+    static let kingdomCreditsID = "85ca954a-41f2-ce94-9b45-8ca3dd39a00d"
+
+    static let currencyOrder = [
+        BridgeWalletCurrency(id: valorantPointsID, name: "Valorant Points"),
+        BridgeWalletCurrency(id: radianiteID, name: "Radianite"),
+        BridgeWalletCurrency(id: kingdomCreditsID, name: "Kingdom Credits")
+    ]
+
+    static func orderedCurrencyPlaceholders(wallet: BridgeWallet?) -> [BridgeWalletItem] {
+        guard let wallet else {
+            return currencyOrder.map { BridgeWalletItem(currency: $0, amount: 0) }
+        }
+
+        return wallet.orderedItems
+    }
+}
+
+struct BridgeWalletCurrency {
+    let id: String
+    let name: String
 }
 
 struct BridgeStorefront: Codable {
@@ -1895,10 +2335,29 @@ struct BridgeStorefrontOffer: Codable, Identifiable {
     }
 }
 
+struct BridgeCollections: Codable {
+    let sprays: [BridgeCollectionItem]
+    let playerCards: [BridgeCollectionItem]
+}
+
+struct BridgeCollectionItem: Codable, Identifiable {
+    let id: String
+    let name: String
+    let iconURL: URL?
+}
+
 struct BridgeLoadout: Codable {
     let subject: String
     let guns: [BridgeLoadoutGun]
     let identity: BridgeLoadoutIdentity?
+
+    func gun(named name: String) -> BridgeLoadoutGun? {
+        guns.first { $0.matchesWeaponName(name) }
+    }
+
+    func guns(named names: [String]) -> [BridgeLoadoutGun] {
+        names.compactMap { gun(named: $0) }
+    }
 
     var sections: [BridgeLoadoutSection] {
         let orderedSections: [(String, (BridgeLoadoutGun) -> Bool)] = [
@@ -1956,12 +2415,58 @@ struct BridgeLoadoutGun: Codable, Identifiable {
     }
 
     var sortName: String {
-        weaponName.lowercased()
+        displayWeaponName.lowercased()
+    }
+
+    var displayWeaponName: String {
+        if categoryKey.contains("melee") || weaponName.localizedCaseInsensitiveContains("melee") {
+            return "Melee"
+        }
+
+        return Self.cleanLoadoutName(weaponName)
+    }
+
+    var displaySkinName: String {
+        let cleanedName = Self.cleanLoadoutName(skinName)
+
+        if displayWeaponName == "Melee", cleanedName.localizedCaseInsensitiveContains("melee") {
+            let withoutWeapon = cleanedName
+                .replacingOccurrences(of: "Melee", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            return withoutWeapon.isEmpty ? "Melee" : withoutWeapon
+        }
+
+        return cleanedName
     }
 
     var isMainWeapon: Bool {
-        let weapon = weaponName.lowercased()
-        return weapon == "vandal" || weapon == "phantom" || weapon == "melee" || weapon == "sheriff"
+        let weapon = displayWeaponName.lowercased()
+        return weapon == "vandal" || weapon == "phantom" || weapon == "melee"
+    }
+
+    func matchesWeaponName(_ name: String) -> Bool {
+        displayWeaponName.lowercased() == name.lowercased()
+    }
+
+    private static func cleanLoadoutName(_ name: String) -> String {
+        var cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let levelRange = cleanedName.range(
+            of: #"\s+Level\s+\d+.*$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) {
+            cleanedName.removeSubrange(levelRange)
+        }
+
+        if let levelRange = cleanedName.range(
+            of: #"\s+Lv\.?\s*\d+.*$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) {
+            cleanedName.removeSubrange(levelRange)
+        }
+
+        return cleanedName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

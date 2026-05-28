@@ -24,6 +24,8 @@ const valorantRemotingAuthToken = process.env.VALORANT_REMOTING_AUTH_TOKEN || ""
 const useMocks = process.env.RR_BRIDGE_USE_MOCKS === "1";
 const cacheDirectory = path.join(__dirname, ".cache");
 const itemTypeIDs = {
+  sprays: "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475",
+  cards: "3f296c07-64c3-494c-923b-fe692a4fa1bd",
   skins: "e7c63390-eda7-46e0-bb7a-a6abdacd2433",
   skinVariants: "3ad1b2b2-acdb-4524-852f-954a76ddae0a"
 };
@@ -831,6 +833,14 @@ const seasonCache = {
   loadedAt: 0,
   seasonsByID: new Map()
 };
+const sprayAssetCache = {
+  loadedAt: 0,
+  spraysByID: new Map()
+};
+const playerCardAssetCache = {
+  loadedAt: 0,
+  cardsByID: new Map()
+};
 
 async function fetchSkinLevel(itemID) {
   if (skinLevelCache.has(itemID)) {
@@ -897,6 +907,36 @@ async function fetchWeaponAssets() {
   weaponAssetCache.skinChromasByID = skinChromasByID;
   weaponAssetCache.skinsByID = skinsByID;
   return weaponAssetCache;
+}
+
+async function fetchSprayAssets() {
+  if (Date.now() - sprayAssetCache.loadedAt < 3600000 && sprayAssetCache.spraysByID.size > 0) {
+    return sprayAssetCache;
+  }
+
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/sprays", "sprays");
+  if (!body) {
+    return sprayAssetCache;
+  }
+
+  sprayAssetCache.loadedAt = Date.now();
+  sprayAssetCache.spraysByID = new Map((body.data || []).map((spray) => [spray.uuid, spray]));
+  return sprayAssetCache;
+}
+
+async function fetchPlayerCardAssets() {
+  if (Date.now() - playerCardAssetCache.loadedAt < 3600000 && playerCardAssetCache.cardsByID.size > 0) {
+    return playerCardAssetCache;
+  }
+
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/playercards", "playercards");
+  if (!body) {
+    return playerCardAssetCache;
+  }
+
+  playerCardAssetCache.loadedAt = Date.now();
+  playerCardAssetCache.cardsByID = new Map((body.data || []).map((card) => [card.uuid, card]));
+  return playerCardAssetCache;
 }
 
 async function fetchSkinChroma(chromaID) {
@@ -1260,7 +1300,7 @@ async function fetchPlayerLoadout(puuid, shard) {
     const skinLevel = gun.SkinLevelID ? await fetchSkinLevel(gun.SkinLevelID) : null;
     const skinChroma = await fetchSkinChroma(gun.ChromaID);
     const skin = getSkinByID(gun.SkinID);
-    const skinName = skinLevel?.displayName || skin?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
+    const skinName = skin?.displayName || skinLevel?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
 
     return {
       id: gun.ID,
@@ -1441,6 +1481,52 @@ async function fetchOwnedItemsDebug(puuid, shard) {
           chromaIDs: (skin.chromas || []).map((chroma) => chroma.uuid)
         }))
     })).filter((weapon) => weapon.skins.length > 0)
+  };
+}
+
+async function fetchCollections(puuid, shard) {
+  if (useMocks) {
+    return {
+      sprays: [],
+      playerCards: []
+    };
+  }
+
+  await ensureRiotReady(shard, "collections");
+  requireMatchingPUUID(puuid);
+
+  const [ownedSprayIDs, ownedCardIDs, sprayAssets, cardAssets] = await Promise.all([
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.sprays),
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.cards),
+    fetchSprayAssets(),
+    fetchPlayerCardAssets()
+  ]);
+
+  const sprays = Array.from(ownedSprayIDs)
+    .map((id) => {
+      const spray = sprayAssets.spraysByID.get(id) || {};
+      return {
+        id,
+        name: spray.displayName || id,
+        iconURL: firstURL(spray.fullTransparentIcon, spray.displayIcon, spray.fullIcon)
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const playerCards = Array.from(ownedCardIDs)
+    .map((id) => {
+      const card = cardAssets.cardsByID.get(id) || {};
+      return {
+        id,
+        name: card.displayName || id,
+        iconURL: firstURL(card.smallArt, card.wideArt, card.largeArt)
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return {
+    sprays,
+    playerCards
   };
 }
 
@@ -1975,6 +2061,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && pathParts[0] === "collections" && pathParts[1]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const collections = await fetchCollections(pathParts[1], shard);
+      sendJSON(res, 200, collections);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "collections_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (requestURL.pathname === "/friends/first-mmr") {
     try {
       const shard = requestURL.searchParams.get("shard") || valorantShard;
@@ -2065,6 +2166,7 @@ const server = http.createServer(async (req, res) => {
       "GET /loadout/:puuid",
       "GET /loadout/:puuid/skins/:weaponID",
       "PUT /loadout/:puuid/equip",
+      "GET /collections/:puuid",
       "GET /friends",
       "GET /friends/mmr?puuids=:puuid,:puuid",
       "GET /friends/status?puuids=:puuid,:puuid",
