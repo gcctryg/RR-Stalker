@@ -400,38 +400,11 @@ struct FriendCareerSummaryView: View {
                         Text("Act Rank")
                             .font(.headline)
 
-                        HStack(alignment: .bottom, spacing: 18) {
-                            ActRankCareerPreview(title: "25 Wins", mmr: mmr, mode: .compact)
-                            ActRankCareerPreview(title: "100 Wins", mmr: mmr, mode: .full)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Recent RR")
-                            .font(.headline)
-
-                        if mmr.lastMatchRRChanges.isEmpty {
-                            Text("No recent RR changes")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                        if mmr.acts.isEmpty {
+                            ActRankActSummaryView(act: mmr.currentActFallback, mmr: mmr)
                         } else {
-                            ForEach(mmr.lastMatchRRChanges.prefix(5)) { rrChange in
-                                HStack {
-                                    Text(rrChange.compactDisplayText)
-                                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                                        .foregroundStyle(rrChange.tint)
-
-                                    Spacer()
-
-                                    if let tierAfter = rrChange.tierAfter {
-                                        Text("Tier \(tierAfter)")
-                                            .font(.caption.monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
+                            ForEach(mmr.acts) { act in
+                                ActRankActSummaryView(act: act, mmr: mmr)
                             }
                         }
                     }
@@ -479,7 +452,6 @@ struct CareerMetricView: View {
 }
 
 struct ActRankCareerPreview: View {
-    let title: String
     let mmr: BridgeFriendMMR
     let mode: ActRankBadgeMode
 
@@ -487,10 +459,110 @@ struct ActRankCareerPreview: View {
         VStack(spacing: 8) {
             ActRankBadgeView(mmr: mmr, mode: mode)
 
-            Text(title)
+            Text(mode.title(for: mmr.actRankBadgeCells.count))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct ActRankActSummaryView: View {
+    let act: BridgeActRankAct
+    let mmr: BridgeFriendMMR
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(act.name)
+                        .font(.subheadline.weight(.semibold))
+
+                    Text("\(act.numberOfWins) wins")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if act.isCurrent {
+                    Text("Current")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.secondary.opacity(0.12), in: Capsule())
+                }
+            }
+
+            HStack(alignment: .top, spacing: 18) {
+                ActRankBadgeView(cells: act.badgeCells, mode: .compact)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    if act.winsByTier.isEmpty {
+                        Text("No ranked wins")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(act.winsByTier) { winTier in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(winTier.color)
+                                    .frame(width: 8, height: 8)
+
+                                Text(winTier.rankName)
+                                    .font(.caption.weight(.semibold))
+
+                                Spacer(minLength: 8)
+
+                                Text("\(winTier.wins)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if act.isCurrent {
+                RecentRRChangesView(mmr: mmr)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+struct RecentRRChangesView: View {
+    let mmr: BridgeFriendMMR
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent RR")
+                .font(.subheadline.weight(.semibold))
+
+            if mmr.lastMatchRRChanges.isEmpty {
+                Text("No recent RR changes")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(mmr.lastMatchRRChanges.prefix(5)) { rrChange in
+                    HStack {
+                        Text(rrChange.compactDisplayText)
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(rrChange.tint)
+
+                        Spacer()
+
+                        if let tierAfter = rrChange.tierAfter {
+                            Text("Tier \(tierAfter)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.top, 4)
     }
 }
 
@@ -499,25 +571,31 @@ enum ActRankBadgeMode: CaseIterable {
     case compact
     case full
 
-    var title: String {
+    func title(for winCount: Int) -> String {
         switch self {
         case .peak:
             return "Peak"
         case .compact:
-            return "25"
+            let slots = rowSizes(for: winCount).reduce(0, +)
+            return "\(slots) slots"
         case .full:
-            return "100"
+            let slots = rowSizes(for: winCount).reduce(0, +)
+            return "\(slots) slots"
         }
     }
 
-    var badgeSize: CGSize {
+    func badgeSize(for winCount: Int) -> CGSize {
         switch self {
         case .peak:
             return CGSize(width: 54, height: 54)
         case .compact:
             return CGSize(width: 82, height: 74)
         case .full:
-            return CGSize(width: 112, height: 100)
+            let extraRows = max(0, rowSizes(for: winCount).count - 10)
+            return CGSize(
+                width: 112 + CGFloat(extraRows * 10),
+                height: 100 + CGFloat(extraRows * 9)
+            )
         }
     }
 
@@ -537,9 +615,15 @@ enum ActRankBadgeMode: CaseIterable {
         case .peak:
             return [1]
         case .compact:
-            return [1, 3, 5, 7, 9]
+            let cappedWinCount = max(1, min(winCount, 25))
+            let rowCount = max(1, min(5, Int(ceil(sqrt(Double(cappedWinCount))))))
+            return (0..<rowCount).map { rowIndex in
+                rowIndex * 2 + 1
+            }
         case .full:
-            return (0..<10).map { rowIndex in
+            let cappedWinCount = max(1, min(winCount, 225))
+            let rowCount = max(1, min(15, Int(ceil(sqrt(Double(cappedWinCount))))))
+            return (0..<rowCount).map { rowIndex in
                 rowIndex * 2 + 1
             }
         }
@@ -555,7 +639,7 @@ struct ActRankDevelopmentBadgeBox: View {
                 VStack(spacing: 2) {
                     ActRankBadgeView(mmr: mmr, mode: mode)
 
-                    Text(mode.title)
+                    Text(mode.title(for: mmr.actRankBadgeCells.count))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -570,15 +654,25 @@ struct ActRankDevelopmentBadgeBox: View {
 }
 
 struct ActRankBadgeView: View {
-    let mmr: BridgeFriendMMR
+    let cells: [BridgeActRankBadgeCell]
     let mode: ActRankBadgeMode
 
+    init(mmr: BridgeFriendMMR, mode: ActRankBadgeMode) {
+        self.cells = mmr.actRankBadgeCells
+        self.mode = mode
+    }
+
+    init(cells: [BridgeActRankBadgeCell], mode: ActRankBadgeMode) {
+        self.cells = cells
+        self.mode = mode
+    }
+
     private var badgeWidth: CGFloat {
-        mode.badgeSize.width
+        mode.badgeSize(for: cells.count).width
     }
 
     private var badgeHeight: CGFloat {
-        mode.badgeSize.height
+        mode.badgeSize(for: cells.count).height
     }
 
     var body: some View {
@@ -611,14 +705,14 @@ struct ActRankBadgeView: View {
     private var displayCells: [BridgeActRankBadgeCell] {
         switch mode {
         case .peak:
-            return Array(mmr.actRankBadgeCells.prefix(1))
+            return Array(cells.prefix(1))
         case .compact, .full:
-            return Array(mmr.actRankBadgeCells.prefix(rowSizes.reduce(0, +)))
+            return Array(cells.prefix(rowSizes.reduce(0, +)))
         }
     }
 
     private var rowSizes: [Int] {
-        mode.rowSizes(for: mmr.actRankBadgeCells.count)
+        mode.rowSizes(for: cells.count)
     }
 }
 
@@ -1182,7 +1276,8 @@ final class PCBridgeClient: ObservableObject {
     @Published var lastFetchedAt: Date?
 
     // Replace this with your PC's local IP address.
-    let baseURL = URL(string: "http://192.168.0.14:3000")!
+    //let baseURL = URL(string: "http://192.168.0.14:3000")!
+    let baseURL = URL(string: "http://100.114.128.21:3000")!
 
     init() {
         favoriteFriendIDs = []
@@ -1713,6 +1808,7 @@ struct BridgeFriendMMR: Codable {
     let actRankWins: [BridgeActRankWin]
     let actRankBadgeCells: [BridgeActRankBadgeCell]
     let actRankBadgeHidden: Bool
+    let acts: [BridgeActRankAct]
 
     var lastMatchRRChangeText: String {
         guard let lastMatchRRChange else {
@@ -1757,6 +1853,7 @@ struct BridgeFriendMMR: Codable {
         case actRankWins
         case actRankBadgeCells
         case actRankBadgeHidden
+        case acts
     }
 
     init(from decoder: Decoder) throws {
@@ -1784,6 +1881,24 @@ struct BridgeFriendMMR: Codable {
         actRankWins = try container.decodeIfPresent([BridgeActRankWin].self, forKey: .actRankWins) ?? []
         actRankBadgeCells = try container.decodeIfPresent([BridgeActRankBadgeCell].self, forKey: .actRankBadgeCells) ?? []
         actRankBadgeHidden = try container.decodeIfPresent(Bool.self, forKey: .actRankBadgeHidden) ?? false
+        acts = try container.decodeIfPresent([BridgeActRankAct].self, forKey: .acts) ?? []
+    }
+
+    var currentActFallback: BridgeActRankAct {
+        BridgeActRankAct(
+            seasonID: seasonID ?? "current",
+            name: "Current Act",
+            type: "act",
+            startTime: "",
+            endTime: "",
+            isCurrent: true,
+            competitiveTier: competitiveTier,
+            rankedRating: rankedRating,
+            leaderboardRank: leaderboardRank,
+            numberOfWins: numberOfWins,
+            winsByTier: actRankWins,
+            badgeCells: actRankBadgeCells
+        )
     }
 }
 
@@ -1793,6 +1908,33 @@ struct BridgeActRankWin: Codable, Identifiable {
 
     var id: Int {
         tier
+    }
+
+    var rankName: String {
+        CompetitiveTierName.name(for: tier)
+    }
+
+    var color: Color {
+        CompetitiveTierColor.color(for: tier)
+    }
+}
+
+struct BridgeActRankAct: Codable, Identifiable {
+    let seasonID: String
+    let name: String
+    let type: String
+    let startTime: String
+    let endTime: String
+    let isCurrent: Bool
+    let competitiveTier: Int
+    let rankedRating: Int
+    let leaderboardRank: Int
+    let numberOfWins: Int
+    let winsByTier: [BridgeActRankWin]
+    let badgeCells: [BridgeActRankBadgeCell]
+
+    var id: String {
+        seasonID
     }
 }
 
@@ -1906,6 +2048,65 @@ struct BridgeRRChange: Codable, Identifiable {
         }
 
         return .secondary
+    }
+}
+
+enum CompetitiveTierName {
+    static func name(for tier: Int) -> String {
+        switch tier {
+        case 3:
+            return "Iron 1"
+        case 4:
+            return "Iron 2"
+        case 5:
+            return "Iron 3"
+        case 6:
+            return "Bronze 1"
+        case 7:
+            return "Bronze 2"
+        case 8:
+            return "Bronze 3"
+        case 9:
+            return "Silver 1"
+        case 10:
+            return "Silver 2"
+        case 11:
+            return "Silver 3"
+        case 12:
+            return "Gold 1"
+        case 13:
+            return "Gold 2"
+        case 14:
+            return "Gold 3"
+        case 15:
+            return "Platinum 1"
+        case 16:
+            return "Platinum 2"
+        case 17:
+            return "Platinum 3"
+        case 18:
+            return "Diamond 1"
+        case 19:
+            return "Diamond 2"
+        case 20:
+            return "Diamond 3"
+        case 21:
+            return "Ascendant 1"
+        case 22:
+            return "Ascendant 2"
+        case 23:
+            return "Ascendant 3"
+        case 24:
+            return "Immortal 1"
+        case 25:
+            return "Immortal 2"
+        case 26:
+            return "Immortal 3"
+        case 27:
+            return "Radiant"
+        default:
+            return "Tier \(tier)"
+        }
     }
 }
 

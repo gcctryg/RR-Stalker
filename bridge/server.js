@@ -766,6 +766,10 @@ const contentTierCache = {
   loadedAt: 0,
   tiersByID: new Map()
 };
+const seasonCache = {
+  loadedAt: 0,
+  seasonsByID: new Map()
+};
 
 async function fetchSkinLevel(itemID) {
   if (skinLevelCache.has(itemID)) {
@@ -927,6 +931,32 @@ async function fetchContentTierAssets() {
   return tiersByID;
 }
 
+async function fetchSeasonAssets() {
+  if (Date.now() - seasonCache.loadedAt < 3600000 && seasonCache.seasonsByID.size > 0) {
+    return seasonCache.seasonsByID;
+  }
+
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/seasons", "seasons");
+  if (!body) {
+    return seasonCache.seasonsByID;
+  }
+
+  const seasonsByID = new Map();
+  for (const season of body.data || []) {
+    seasonsByID.set(season.uuid, {
+      name: season.displayName || season.devName || "Unknown Act",
+      type: season.type || "",
+      parentUUID: season.parentUuid || season.parentUUID || "",
+      startTime: season.startTime || "",
+      endTime: season.endTime || ""
+    });
+  }
+
+  seasonCache.loadedAt = Date.now();
+  seasonCache.seasonsByID = seasonsByID;
+  return seasonsByID;
+}
+
 function formatRankName(rankName) {
   if (!rankName) {
     return "";
@@ -937,6 +967,7 @@ function formatRankName(rankName) {
 
 async function withCompetitiveTierAssets(mmrInfo) {
   const tiers = await fetchCompetitiveTierAssets();
+  const seasons = await fetchSeasonAssets();
   const tier = tiers.get(mmrInfo.competitiveTier);
   const actRankBadgeCells = (mmrInfo.actRankBadgeCells || []).map((cell) => {
     const cellTier = tiers.get(cell.tier);
@@ -947,12 +978,45 @@ async function withCompetitiveTierAssets(mmrInfo) {
       rankTriangleUpIconURL: cellTier?.rankTriangleUpIcon || null
     };
   });
+  const acts = (mmrInfo.acts || []).map((act) => ({
+    ...act,
+    ...(() => {
+      const season = seasons.get(act.seasonID);
+      const parent = season?.parentUUID ? seasons.get(season.parentUUID) : null;
+      const seasonName = season?.name || act.name || "Unknown Act";
+      const name = parent?.name ? `${parent.name} ${seasonName}` : seasonName;
+
+      return {
+        name,
+        type: season?.type || act.type || "",
+        startTime: season?.startTime || act.startTime || "",
+        endTime: season?.endTime || act.endTime || "",
+        badgeCells: (act.badgeCells || []).map((cell) => {
+          const cellTier = tiers.get(cell.tier);
+
+          return {
+            ...cell,
+            rankTriangleDownIconURL: cellTier?.rankTriangleDownIcon || null,
+            rankTriangleUpIconURL: cellTier?.rankTriangleUpIcon || null
+          };
+        })
+      };
+    })()
+  }))
+    .sort((a, b) => {
+      if (a.isCurrent !== b.isCurrent) {
+        return a.isCurrent ? -1 : 1;
+      }
+
+      return (b.startTime || "").localeCompare(a.startTime || "");
+    });
 
   return {
     ...mmrInfo,
     rankName: tier?.name || (mmrInfo.competitiveTier > 0 ? `Tier ${mmrInfo.competitiveTier}` : "Unrated"),
     rankIconURL: tier?.largeIcon || tier?.smallIcon || null,
-    actRankBadgeCells
+    actRankBadgeCells,
+    acts
   };
 }
 
@@ -1255,7 +1319,7 @@ function getActRankWins(season) {
     .sort((a, b) => b.tier - a.tier);
 }
 
-function getActRankBadgeCells(season, maxCells = 100) {
+function getActRankBadgeCells(season, maxCells = 225) {
   const cells = [];
 
   for (const entry of getActRankWins(season)) {
@@ -1271,6 +1335,32 @@ function getActRankBadgeCells(season, maxCells = 100) {
   }
 
   return cells;
+}
+
+function getCompetitiveActs(seasons, currentSeasonID) {
+  return Object.entries(seasons)
+    .map(([seasonID, season]) => ({
+      seasonID,
+      name: "",
+      type: "",
+      startTime: "",
+      endTime: "",
+      isCurrent: seasonID === currentSeasonID,
+      competitiveTier: season.CompetitiveTier || 0,
+      rankedRating: season.RankedRating || 0,
+      leaderboardRank: season.LeaderboardRank || 0,
+      numberOfWins: season.NumberOfWins || 0,
+      winsByTier: getActRankWins(season),
+      badgeCells: getActRankBadgeCells(season)
+    }))
+    .filter((act) => act.numberOfWins > 0 || act.winsByTier.length > 0)
+    .sort((a, b) => {
+      if (a.isCurrent !== b.isCurrent) {
+        return a.isCurrent ? -1 : 1;
+      }
+
+      return a.seasonID.localeCompare(b.seasonID);
+    });
 }
 
 function getLatestCompetitiveInfo(mmr, recentCompetitiveUpdates = [], recentCompetitiveUpdatesError = null) {
@@ -1306,7 +1396,8 @@ function getLatestCompetitiveInfo(mmr, recentCompetitiveUpdates = [], recentComp
     lastMatchRRChangesError: recentCompetitiveUpdatesError,
     actRankWins: getActRankWins(season),
     actRankBadgeCells: getActRankBadgeCells(season),
-    actRankBadgeHidden: Boolean(mmr?.IsActRankBadgeHidden)
+    actRankBadgeHidden: Boolean(mmr?.IsActRankBadgeHidden),
+    acts: getCompetitiveActs(seasons, latestSeasonID || season.SeasonID || "")
   };
 }
 
@@ -1360,6 +1451,42 @@ async function fetchPlayerMMR(puuid, shard) {
         }))
       ],
       actRankBadgeHidden: false,
+      acts: [
+        {
+          seasonID: "mock-season",
+          name: "Current Act",
+          type: "act",
+          startTime: "",
+          endTime: "",
+          isCurrent: true,
+          competitiveTier: 15,
+          rankedRating: 50,
+          leaderboardRank: 0,
+          numberOfWins: 36,
+          winsByTier: [
+            { tier: 15, wins: 18 },
+            { tier: 14, wins: 12 },
+            { tier: 13, wins: 6 }
+          ],
+          badgeCells: [
+            ...Array.from({ length: 18 }, () => ({
+              tier: 15,
+              rankTriangleDownIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/ranktriangledownicon.png",
+              rankTriangleUpIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/15/ranktriangleupicon.png"
+            })),
+            ...Array.from({ length: 12 }, () => ({
+              tier: 14,
+              rankTriangleDownIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/14/ranktriangledownicon.png",
+              rankTriangleUpIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/14/ranktriangleupicon.png"
+            })),
+            ...Array.from({ length: 6 }, () => ({
+              tier: 13,
+              rankTriangleDownIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/13/ranktriangledownicon.png",
+              rankTriangleUpIconURL: "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/13/ranktriangleupicon.png"
+            }))
+          ]
+        }
+      ],
       lastMatchRRChanges: [
         { matchID: "mock-match-1", matchStartTime: Date.now() - 3600000, rrChange: 18, rrPerformanceBonus: 3, afkPenalty: 0, rankedRatingBefore: 32, rankedRatingAfter: 50, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-1" },
         { matchID: "mock-match-2", matchStartTime: Date.now() - 7200000, rrChange: -12, rrPerformanceBonus: 0, afkPenalty: 0, rankedRatingBefore: 44, rankedRatingAfter: 32, tierBefore: 15, tierAfter: 15, seasonID: "mock-season", mapID: "mock-map-2" },
