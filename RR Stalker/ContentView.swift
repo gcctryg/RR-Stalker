@@ -156,10 +156,10 @@ struct ProfileView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     ProfileNavigationHeader(bridge: bridge)
 
-                    WalletSummaryCard(wallet: bridge.wallet)
+                    CurrentSeasonPeakCard(mmr: bridge.currentPlayerMMR, errorMessage: bridge.currentPlayerMMRErrorMessage)
 
                     if let storefront = bridge.storefront {
-                        ShopSection(storefront: storefront)
+                        ShopSection(storefront: storefront, wallet: bridge.wallet)
                     }
 
                     if let errorMessage = bridge.errorMessage {
@@ -1197,6 +1197,90 @@ struct WalletCurrencyView: View {
     }
 }
 
+struct WalletHeaderSummary: View {
+    let wallet: BridgeWallet?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(BridgeWalletItem.orderedCurrencyPlaceholders(wallet: wallet)) { item in
+                HStack(spacing: 4) {
+                    AsyncImage(url: item.iconURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        default:
+                            Image(systemName: item.fallbackSystemImage)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.gray)
+                        }
+                    }
+                    .frame(width: 17, height: 17)
+
+                    Text("\(item.amount)")
+                        .font(.headline.monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.gray.opacity(0.24), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityLabel(walletAccessibilityText)
+    }
+
+    private var walletAccessibilityText: String {
+        BridgeWalletItem
+            .orderedCurrencyPlaceholders(wallet: wallet)
+            .map { "\($0.shortName) \($0.amount)" }
+            .joined(separator: ", ")
+    }
+}
+
+struct CurrentSeasonPeakCard: View {
+    let mmr: BridgeFriendMMR?
+    let errorMessage: String?
+
+    var body: some View {
+        Group {
+            if let mmr, mmr.hasRank {
+                let act = mmr.acts.first(where: \.isCurrent) ?? mmr.currentActFallback
+
+                HStack(spacing: 14) {
+                    ActRankBadgeView(cells: act.badgeCells, mode: .peak)
+                        .frame(width: 72, height: 72)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Current Season Peak")
+                            .font(.headline)
+
+                        Text(act.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 10) {
+                            Text(mmr.rankName)
+                            Text("\(act.numberOfWins) wins")
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            } else if let errorMessage {
+                Text("Current season peak unavailable: \(errorMessage)")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
 struct CollectionSectionLabel: View {
     let title: String
     let systemImage: String
@@ -1289,12 +1373,12 @@ struct InfoRow: View {
 
 struct ShopSection: View {
     let storefront: BridgeStorefront
-    @State private var isRevealed = false
+    let wallet: BridgeWallet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text("Shop")
+                Text("SHOP")
                     .font(.headline)
 
                 Text(storefront.remainingTimeText)
@@ -1303,21 +1387,11 @@ struct ShopSection: View {
 
                 Spacer()
 
-                Button {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
-                        isRevealed.toggle()
-                    }
-                } label: {
-                    Image(systemName: isRevealed ? "eye.slash" : "eye")
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel(isRevealed ? "Hide all shop offers" : "Reveal all shop offers")
+                WalletHeaderSummary(wallet: wallet)
             }
 
             ForEach(storefront.offers) { offer in
-                ShopOfferRow(offer: offer, isRevealed: isRevealed)
+                ShopOfferRow(offer: offer)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1326,24 +1400,37 @@ struct ShopSection: View {
 
 struct ShopOfferRow: View {
     let offer: BridgeStorefrontOffer
-    let isRevealed: Bool
+    @State private var didRevealCard = false
+
+    private var shouldReveal: Bool {
+        didRevealCard
+    }
 
     var body: some View {
-        ZStack {
-            if isRevealed {
-                revealedContent
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.92).combined(with: .opacity),
-                        removal: .scale(scale: 1.04).combined(with: .opacity)
-                    ))
-            } else {
-                hiddenContent
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.96).combined(with: .opacity),
-                        removal: .scale(scale: 0.92).combined(with: .opacity)
-                    ))
+        Button {
+            if !shouldReveal {
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                    didRevealCard = true
+                }
+            }
+        } label: {
+            ZStack {
+                if shouldReveal {
+                    revealedContent
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.92).combined(with: .opacity),
+                            removal: .scale(scale: 1.04).combined(with: .opacity)
+                        ))
+                } else {
+                    hiddenContent
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.96).combined(with: .opacity),
+                            removal: .scale(scale: 0.92).combined(with: .opacity)
+                        ))
+                }
             }
         }
+        .buttonStyle(.plain)
         .padding()
         .background {
             RoundedRectangle(cornerRadius: 8)
@@ -1354,7 +1441,7 @@ struct ShopOfferRow: View {
                 .stroke(cardBorderColor, lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(isRevealed ? "\(offer.name), \(offer.price) VP" : "Hidden shop offer")
+        .accessibilityLabel(shouldReveal ? "\(offer.name), \(offer.price) VP" : "Hidden shop offer")
     }
 
     private var revealedContent: some View {
@@ -1379,25 +1466,25 @@ struct ShopOfferRow: View {
 
     private var hiddenContent: some View {
         HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(tierColor.opacity(0.24))
+
+                tierIcon
+            }
+            .frame(width: 86, height: 58)
+
             VStack(alignment: .leading, spacing: 6) {
                 Text(offer.contentTierName ?? "Hidden Offer")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
 
-                Text("Reveal shop to view")
+                Text("Tap to reveal")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
-
-            ZStack {
-                Circle()
-                    .fill(.white.opacity(0.18))
-
-                tierIcon
-            }
-            .frame(width: 46, height: 46)
         }
         .frame(minHeight: 58)
     }
@@ -1417,11 +1504,11 @@ struct ShopOfferRow: View {
                         .foregroundStyle(.white)
                 }
             }
-            .padding(8)
+            .frame(width: 28, height: 28)
         } else {
             Image(systemName: "questionmark")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(tierColor)
         }
     }
 
@@ -1430,15 +1517,15 @@ struct ShopOfferRow: View {
     }
 
     private var cardBackgroundColor: Color {
-        if isRevealed {
-            return .secondary.opacity(0.08)
+        if shouldReveal {
+            return tierColor.opacity(0.28)
         }
 
         return tierColor.opacity(0.22)
     }
 
     private var cardBorderColor: Color {
-        if isRevealed {
+        if shouldReveal {
             return .secondary.opacity(0.18)
         }
 
@@ -1800,6 +1887,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var player: BridgePlayer?
     @Published var wallet: BridgeWallet?
     @Published var storefront: BridgeStorefront?
+    @Published var currentPlayerMMR: BridgeFriendMMR?
     @Published var loadout: BridgeLoadout?
     @Published var collections: BridgeCollections?
     @Published var friends: BridgeFriends?
@@ -1810,6 +1898,7 @@ final class PCBridgeClient: ObservableObject {
     @Published var errorMessage: String?
     @Published var walletErrorMessage: String?
     @Published var storefrontErrorMessage: String?
+    @Published var currentPlayerMMRErrorMessage: String?
     @Published var loadoutErrorMessage: String?
     @Published var collectionsErrorMessage: String?
     @Published var friendsErrorMessage: String?
@@ -1858,6 +1947,7 @@ final class PCBridgeClient: ObservableObject {
         errorMessage = nil
         walletErrorMessage = nil
         storefrontErrorMessage = nil
+        currentPlayerMMRErrorMessage = nil
         loadoutErrorMessage = nil
         collectionsErrorMessage = nil
         friendsErrorMessage = nil
@@ -1876,6 +1966,7 @@ final class PCBridgeClient: ObservableObject {
                 favoriteFriendStatuses = [:]
                 wallet = nil
                 storefront = nil
+                currentPlayerMMR = nil
                 loadout = nil
                 collections = nil
                 friends = nil
@@ -1897,6 +1988,15 @@ final class PCBridgeClient: ObservableObject {
                 storefront = try await fetchJSON(from: storefrontURL)
             } catch {
                 storefrontErrorMessage = "Player loaded, but shop failed: \(error.localizedDescription)"
+            }
+
+            let mmrURL = baseURL
+                .appending(path: "mmr")
+                .appending(path: loadedPlayer.puuid)
+            do {
+                currentPlayerMMR = try await fetchJSON(from: mmrURL)
+            } catch {
+                currentPlayerMMRErrorMessage = error.localizedDescription
             }
 
             let loadoutURL = baseURL
@@ -2079,6 +2179,7 @@ final class PCBridgeClient: ObservableObject {
         player = snapshot.player
         wallet = snapshot.wallet
         storefront = snapshot.storefront
+        currentPlayerMMR = snapshot.currentPlayerMMR
         loadout = snapshot.loadout
         collections = snapshot.collections
         friends = snapshot.friends
@@ -2098,6 +2199,7 @@ final class PCBridgeClient: ObservableObject {
             player: player,
             wallet: wallet,
             storefront: storefront,
+            currentPlayerMMR: currentPlayerMMR,
             loadout: loadout,
             collections: collections,
             friends: friends,
@@ -2173,6 +2275,7 @@ struct BridgeCachedSnapshot: Codable {
     let player: BridgePlayer?
     let wallet: BridgeWallet?
     let storefront: BridgeStorefront?
+    let currentPlayerMMR: BridgeFriendMMR?
     let loadout: BridgeLoadout?
     let collections: BridgeCollections?
     let friends: BridgeFriends?
