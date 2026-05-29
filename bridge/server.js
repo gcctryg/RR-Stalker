@@ -27,7 +27,8 @@ const itemTypeIDs = {
   sprays: "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475",
   cards: "3f296c07-64c3-494c-923b-fe692a4fa1bd",
   skins: "e7c63390-eda7-46e0-bb7a-a6abdacd2433",
-  skinVariants: "3ad1b2b2-acdb-4524-852f-954a76ddae0a"
+  skinVariants: "3ad1b2b2-acdb-4524-852f-954a76ddae0a",
+  buddies: "dd3bf334-87f3-40bd-b043-682a57a8dc3a"
 };
 const authState = {
   accessToken: initialValorantAccessToken,
@@ -1509,6 +1510,79 @@ async function fetchOwnedWeaponSkins(puuid, shard, weaponID) {
   };
 }
 
+async function fetchOwnedWeaponCharms(puuid, shard, weaponID) {
+  if (useMocks) {
+    return {
+      weaponID,
+      weaponName: weaponID,
+      equippedCharmID: "",
+      charms: []
+    };
+  }
+
+  await ensureRiotReady(shard, "owned gun buddies");
+  requireMatchingPUUID(puuid);
+
+  const [loadout, weaponAssets, buddyAssets, ownedBuddyIDs] = await Promise.all([
+    fetchRawPlayerLoadout(puuid, shard),
+    fetchWeaponAssets(),
+    fetchBuddyAssets(),
+    fetchOwnedItemIDs(puuid, shard, itemTypeIDs.buddies)
+  ]);
+  const weapon = weaponAssets.weaponsByID.get(weaponID);
+  const currentGun = (loadout.Guns || []).find((gun) => gun.ID === weaponID) || null;
+
+  if (!weapon) {
+    const error = new Error("Weapon was not found in Valorant-API assets.");
+    error.statusCode = 404;
+    error.code = "weapon_not_found";
+    throw error;
+  }
+
+  const charms = Array.from(buddyAssets.buddiesByID.values())
+    .filter((buddy) => {
+      const levels = Array.isArray(buddy?.levels) ? buddy.levels : [];
+      return (
+        ownedBuddyIDs.has(buddy?.uuid) ||
+        levels.some((level) => ownedBuddyIDs.has(level.uuid)) ||
+        currentGun?.CharmID === buddy?.uuid
+      );
+    })
+    .map((buddy) => {
+      const levels = Array.isArray(buddy?.levels) ? buddy.levels : [];
+      const ownedLevel = levels.find((level) => ownedBuddyIDs.has(level.uuid));
+      const defaultLevel = ownedLevel || levels[0] || {};
+      const isEquipped = currentGun?.CharmID === buddy.uuid;
+      const equippedLevel = isEquipped
+        ? levels.find((level) => level.uuid === currentGun?.CharmLevelID) || defaultLevel
+        : defaultLevel;
+
+      return {
+        id: buddy.uuid,
+        weaponID,
+        name: buddy.displayName || buddy.uuid,
+        iconURL: firstURL(equippedLevel.displayIcon, buddy.displayIcon),
+        charmID: buddy.uuid,
+        charmLevelID: equippedLevel.uuid || "",
+        isEquipped
+      };
+    })
+    .sort((a, b) => {
+      if (a.isEquipped !== b.isEquipped) {
+        return a.isEquipped ? -1 : 1;
+      }
+
+      return a.name.localeCompare(b.name);
+    });
+
+  return {
+    weaponID,
+    weaponName: weapon.displayName || weaponID,
+    equippedCharmID: currentGun?.CharmID || "",
+    charms
+  };
+}
+
 async function fetchOwnedItemsDebug(puuid, shard) {
   await ensureRiotReady(shard, "owned items debug");
   requireMatchingPUUID(puuid);
@@ -1626,6 +1700,66 @@ async function equipWeaponSkin(puuid, shard, body) {
         SkinID: skinID,
         SkinLevelID: skinLevelID,
         ChromaID: chromaID,
+        Attachments: item.Attachments || []
+      };
+    }),
+    Sprays: loadout.Sprays || [],
+    Identity: loadout.Identity || {},
+    Incognito: Boolean(loadout.Incognito)
+  };
+
+  await fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(nextLoadout),
+    errorMessage: "Riot set player loadout request failed.",
+    errorCode: "riot_set_loadout_failed"
+  });
+
+  return fetchPlayerLoadout(puuid, shard);
+}
+
+async function equipWeaponCharm(puuid, shard, body) {
+  if (useMocks) {
+    return getMockLoadout(puuid);
+  }
+
+  await ensureRiotReady(shard, "set player loadout");
+  requireMatchingPUUID(puuid);
+
+  const weaponID = body.weaponID || body.id;
+  const charmID = body.charmID;
+  const charmLevelID = body.charmLevelID;
+
+  if (!weaponID || !charmID || !charmLevelID) {
+    const error = new Error("weaponID, charmID, and charmLevelID are required.");
+    error.statusCode = 400;
+    error.code = "missing_loadout_charm_fields";
+    throw error;
+  }
+
+  const loadout = await fetchRawPlayerLoadout(puuid, shard);
+  const gun = (loadout.Guns || []).find((item) => item.ID === weaponID);
+
+  if (!gun) {
+    const error = new Error("Weapon was not found in current loadout.");
+    error.statusCode = 404;
+    error.code = "loadout_weapon_not_found";
+    throw error;
+  }
+
+  const nextLoadout = {
+    Guns: (loadout.Guns || []).map((item) => {
+      if (item.ID !== weaponID) {
+        return item;
+      }
+
+      return {
+        ...item,
+        CharmID: charmID,
+        CharmLevelID: charmLevelID,
         Attachments: item.Attachments || []
       };
     }),
@@ -2070,6 +2204,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && pathParts[0] === "loadout" && pathParts[1] && pathParts[2] === "charms" && pathParts[3]) {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const charms = await fetchOwnedWeaponCharms(pathParts[1], shard, pathParts[3]);
+      sendJSON(res, 200, charms);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "owned_weapon_charms_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
   if (req.method === "GET" && pathParts[0] === "loadout" && pathParts[1] && pathParts[2] === "owned-debug") {
     try {
       const shard = requestURL.searchParams.get("shard") || valorantShard;
@@ -2094,6 +2243,22 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       sendJSON(res, error.statusCode || 500, {
         error: error.code || "equip_weapon_skin_error",
+        message: error.message,
+        details: error.body
+      });
+    }
+    return;
+  }
+
+  if (req.method === "PUT" && pathParts[0] === "loadout" && pathParts[1] && pathParts[2] === "equip-charm") {
+    try {
+      const shard = requestURL.searchParams.get("shard") || valorantShard;
+      const body = await readJSONBody(req);
+      const loadout = await equipWeaponCharm(pathParts[1], shard, body);
+      sendJSON(res, 200, loadout);
+    } catch (error) {
+      sendJSON(res, error.statusCode || 500, {
+        error: error.code || "equip_weapon_charm_error",
         message: error.message,
         details: error.body
       });
@@ -2220,7 +2385,9 @@ const server = http.createServer(async (req, res) => {
       "GET /storefront/:puuid",
       "GET /loadout/:puuid",
       "GET /loadout/:puuid/skins/:weaponID",
+      "GET /loadout/:puuid/charms/:weaponID",
       "PUT /loadout/:puuid/equip",
+      "PUT /loadout/:puuid/equip-charm",
       "GET /collections/:puuid",
       "GET /friends",
       "GET /friends/mmr?puuids=:puuid,:puuid",

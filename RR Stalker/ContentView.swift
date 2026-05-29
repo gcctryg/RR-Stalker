@@ -76,7 +76,7 @@ struct LoadoutView: View {
             .padding()
         }
         .sheet(item: $selectedGun) { gun in
-            LoadoutSkinPickerView(bridge: bridge, gun: gun)
+            LoadoutWeaponDetailView(bridge: bridge, gun: gun)
         }
     }
 }
@@ -157,7 +157,7 @@ struct CollectionsView: View {
                 }
             }
             .sheet(item: $selectedGun) { gun in
-                LoadoutSkinPickerView(bridge: bridge, gun: gun)
+                LoadoutWeaponDetailView(bridge: bridge, gun: gun)
             }
         }
     }
@@ -1724,18 +1724,27 @@ enum LoadoutWeaponCardStyle {
     var imageHeight: CGFloat {
         switch self {
         case .square:
-            return 86
+            return 78
         case .rectangle:
-            return 104
+            return 100
         }
     }
 
     var cardHeight: CGFloat {
         switch self {
         case .square:
-            return 190
+            return 156
         case .rectangle:
-            return 184
+            return 178
+        }
+    }
+
+    var textHeight: CGFloat {
+        switch self {
+        case .square:
+            return 46
+        case .rectangle:
+            return 46
         }
     }
 }
@@ -1745,7 +1754,7 @@ struct LoadoutWeaponCard: View {
     var style: LoadoutWeaponCardStyle = .square
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 AsyncImage(url: gun.iconURL) { phase in
                     switch phase {
@@ -1775,10 +1784,10 @@ struct LoadoutWeaponCard: View {
                     .lineLimit(3)
                     .minimumScaleFactor(0.78)
             }
-            .frame(height: 68, alignment: .topLeading)
+            .frame(height: style.textHeight, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
+        .padding(12)
         .frame(height: style.cardHeight, alignment: .topLeading)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 8))
         .overlay(alignment: .topLeading) {
@@ -1821,6 +1830,132 @@ struct LoadoutWeaponCard: View {
 
     private var cardBackground: some ShapeStyle {
         (gun.contentTierColorValue ?? .secondary).opacity(0.18)
+    }
+}
+
+struct LoadoutWeaponDetailView: View {
+    @ObservedObject var bridge: PCBridgeClient
+    @Environment(\.dismiss) private var dismiss
+    let gun: BridgeLoadoutGun
+
+    @State private var isShowingSkinPicker = false
+    @State private var isShowingCharmPicker = false
+
+    private var currentGun: BridgeLoadoutGun {
+        bridge.loadout?.guns.first(where: { $0.id == gun.id }) ?? gun
+    }
+
+    private var canUseCharm: Bool {
+        !currentGun.categoryKey.contains("melee") && !currentGun.weaponName.localizedCaseInsensitiveContains("melee")
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Button {
+                    isShowingSkinPicker = true
+                } label: {
+                    LoadoutDetailCard(
+                        title: "Current Skin",
+                        name: currentGun.displaySkinName,
+                        iconURL: currentGun.iconURL,
+                        fallbackSystemImage: "scope",
+                        accentColor: currentGun.contentTierColorValue ?? .secondary
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if canUseCharm {
+                    Button {
+                        isShowingCharmPicker = true
+                    } label: {
+                        LoadoutDetailCard(
+                            title: "Charm",
+                            name: currentGun.charmName ?? "No Charm",
+                            iconURL: currentGun.charmIconURL,
+                            fallbackSystemImage: "circle.hexagongrid.fill",
+                            accentColor: .secondary
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle(currentGun.displayWeaponName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(isPresented: $isShowingSkinPicker) {
+                LoadoutSkinPickerView(bridge: bridge, gun: currentGun)
+            }
+            .sheet(isPresented: $isShowingCharmPicker) {
+                LoadoutCharmPickerView(bridge: bridge, gun: currentGun)
+            }
+        }
+    }
+}
+
+struct LoadoutDetailCard: View {
+    let title: String
+    let name: String
+    let iconURL: URL?
+    let fallbackSystemImage: String
+    let accentColor: Color
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(accentColor.opacity(0.16))
+
+                AsyncImage(url: iconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    default:
+                        Image(systemName: fallbackSystemImage)
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(10)
+            }
+            .frame(width: 112, height: 82)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(name)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.78)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.secondary.opacity(0.14), lineWidth: 1)
+        }
     }
 }
 
@@ -1981,6 +2116,185 @@ struct LoadoutSkinRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(skin.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+
+                Text(isEquipped ? "Equipped" : "Owned")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if isEquipped {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else if isSelected {
+                Image(systemName: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+struct LoadoutCharmPickerView: View {
+    @ObservedObject var bridge: PCBridgeClient
+    @Environment(\.dismiss) private var dismiss
+    let gun: BridgeLoadoutGun
+
+    @State private var inventory: BridgeOwnedWeaponCharms?
+    @State private var selectedCharm: BridgeOwnedWeaponCharm?
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+    @State private var isEquipping = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let inventory {
+                    if inventory.charms.isEmpty {
+                        ContentUnavailableView(
+                            "No Owned Charms",
+                            systemImage: "circle.hexagongrid.fill",
+                            description: Text("No owned charms were returned for \(gun.displayWeaponName).")
+                        )
+                    } else {
+                        List(inventory.charms) { charm in
+                            Button {
+                                selectedCharm = charm
+                            } label: {
+                                LoadoutCharmRow(
+                                    charm: charm,
+                                    isSelected: selectedCharm?.id == charm.id,
+                                    isEquipped: charm.isEquipped
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .listStyle(.plain)
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Charms Not Loaded",
+                        systemImage: "circle.hexagongrid.fill",
+                        description: Text("Pull to load owned charms.")
+                    )
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                }
+
+                Button {
+                    Task {
+                        await equipSelectedCharm()
+                    }
+                } label: {
+                    if isEquipping {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text(equipButtonTitle)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(equipButtonDisabled)
+                .padding()
+            }
+            .navigationTitle("\(gun.displayWeaponName) Charm")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                await loadCharms()
+            }
+        }
+    }
+
+    private var equipButtonTitle: String {
+        guard let selectedCharm else {
+            return "Select a Charm"
+        }
+
+        return selectedCharm.isEquipped ? "Equipped" : "Equip"
+    }
+
+    private var equipButtonDisabled: Bool {
+        selectedCharm == nil || selectedCharm?.isEquipped == true || isEquipping
+    }
+
+    private func loadCharms() async {
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let loadedInventory = try await bridge.loadOwnedWeaponCharms(for: gun)
+            inventory = loadedInventory
+            selectedCharm = loadedInventory.charms.first(where: \.isEquipped) ?? loadedInventory.charms.first
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func equipSelectedCharm() async {
+        guard let charmToEquip = selectedCharm else {
+            return
+        }
+
+        isEquipping = true
+        errorMessage = nil
+
+        do {
+            try await bridge.equipWeaponCharm(charmToEquip, for: gun)
+            inventory = try await bridge.loadOwnedWeaponCharms(for: gun)
+            selectedCharm = inventory?.charms.first(where: \.isEquipped) ?? charmToEquip
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isEquipping = false
+    }
+}
+
+struct LoadoutCharmRow: View {
+    let charm: BridgeOwnedWeaponCharm
+    let isSelected: Bool
+    let isEquipped: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: charm.iconURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                default:
+                    Image(systemName: "circle.hexagongrid.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 52, height: 52)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(charm.name)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(2)
 
@@ -2268,6 +2582,20 @@ final class PCBridgeClient: ObservableObject {
         return try await fetchJSON(from: url)
     }
 
+    func loadOwnedWeaponCharms(for gun: BridgeLoadoutGun) async throws -> BridgeOwnedWeaponCharms {
+        guard let player else {
+            throw BridgeError.invalidResponse
+        }
+
+        let url = baseURL
+            .appending(path: "loadout")
+            .appending(path: player.puuid)
+            .appending(path: "charms")
+            .appending(path: gun.id)
+
+        return try await fetchJSON(from: url)
+    }
+
     func equipWeaponSkin(_ skin: BridgeOwnedWeaponSkin, for gun: BridgeLoadoutGun) async throws {
         guard let player else {
             throw BridgeError.invalidResponse
@@ -2282,6 +2610,25 @@ final class PCBridgeClient: ObservableObject {
             skinID: skin.skinID,
             skinLevelID: skin.skinLevelID,
             chromaID: skin.chromaID
+        )
+        let updatedLoadout: BridgeLoadout = try await sendJSON(to: url, method: "PUT", body: body)
+        loadout = updatedLoadout
+        saveCachedSnapshot()
+    }
+
+    func equipWeaponCharm(_ charm: BridgeOwnedWeaponCharm, for gun: BridgeLoadoutGun) async throws {
+        guard let player else {
+            throw BridgeError.invalidResponse
+        }
+
+        let url = baseURL
+            .appending(path: "loadout")
+            .appending(path: player.puuid)
+            .appending(path: "equip-charm")
+        let body = BridgeEquipWeaponCharmRequest(
+            weaponID: gun.id,
+            charmID: charm.charmID,
+            charmLevelID: charm.charmLevelID
         )
         let updatedLoadout: BridgeLoadout = try await sendJSON(to: url, method: "PUT", body: body)
         loadout = updatedLoadout
@@ -2719,6 +3066,13 @@ struct BridgeOwnedWeaponSkins: Codable {
     let skins: [BridgeOwnedWeaponSkin]
 }
 
+struct BridgeOwnedWeaponCharms: Codable {
+    let weaponID: String
+    let weaponName: String
+    let equippedCharmID: String
+    let charms: [BridgeOwnedWeaponCharm]
+}
+
 struct BridgeOwnedWeaponSkin: Codable, Identifiable {
     let id: String
     let weaponID: String
@@ -2730,11 +3084,27 @@ struct BridgeOwnedWeaponSkin: Codable, Identifiable {
     let isEquipped: Bool
 }
 
+struct BridgeOwnedWeaponCharm: Codable, Identifiable {
+    let id: String
+    let weaponID: String
+    let name: String
+    let iconURL: URL?
+    let charmID: String
+    let charmLevelID: String
+    let isEquipped: Bool
+}
+
 struct BridgeEquipWeaponSkinRequest: Encodable {
     let weaponID: String
     let skinID: String
     let skinLevelID: String
     let chromaID: String
+}
+
+struct BridgeEquipWeaponCharmRequest: Encodable {
+    let weaponID: String
+    let charmID: String
+    let charmLevelID: String
 }
 
 struct BridgeLoadoutIdentity: Codable {
