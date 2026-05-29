@@ -1724,27 +1724,27 @@ enum LoadoutWeaponCardStyle {
     var imageHeight: CGFloat {
         switch self {
         case .square:
-            return 78
+            return 72
         case .rectangle:
-            return 100
+            return 92
         }
     }
 
     var cardHeight: CGFloat {
         switch self {
         case .square:
-            return 156
+            return 134
         case .rectangle:
-            return 178
+            return 154
         }
     }
 
     var textHeight: CGFloat {
         switch self {
         case .square:
-            return 46
+            return 38
         case .rectangle:
-            return 46
+            return 38
         }
     }
 }
@@ -1754,7 +1754,7 @@ struct LoadoutWeaponCard: View {
     var style: LoadoutWeaponCardStyle = .square
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             ZStack {
                 AsyncImage(url: gun.iconURL) { phase in
                     switch phase {
@@ -1787,7 +1787,7 @@ struct LoadoutWeaponCard: View {
             .frame(height: style.textHeight, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(10)
         .frame(height: style.cardHeight, alignment: .topLeading)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 8))
         .overlay(alignment: .topLeading) {
