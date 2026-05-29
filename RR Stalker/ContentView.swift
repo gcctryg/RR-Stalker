@@ -1781,6 +1781,24 @@ struct LoadoutWeaponCard: View {
         .padding()
         .frame(height: style.cardHeight, alignment: .topLeading)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(alignment: .topLeading) {
+            if let charmIconURL = gun.charmIconURL {
+                AsyncImage(url: charmIconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    default:
+                        Image(systemName: "circle.hexagongrid.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .padding(8)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if let tierIconURL = gun.contentTierIconURL {
                 AsyncImage(url: tierIconURL) { phase in
@@ -2618,6 +2636,9 @@ struct BridgeLoadoutGun: Codable, Identifiable {
     let skinLevelID: String
     let chromaID: String
     let charmID: String?
+    let charmLevelID: String?
+    let charmName: String?
+    let charmIconURL: URL?
     let contentTierUUID: String?
     let contentTierName: String?
     let contentTierColor: String?

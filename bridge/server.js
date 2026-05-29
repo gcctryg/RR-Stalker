@@ -714,7 +714,11 @@ function getMockLoadout(puuid) {
         category: "Rifles",
         skinID: "mock-prime-vandal",
         skinLevelID: "mock-prime-vandal-level",
-        chromaID: "mock-prime-vandal-chroma"
+        chromaID: "mock-prime-vandal-chroma",
+        charmID: "mock-buddy",
+        charmLevelID: "mock-buddy-level",
+        charmName: "Mock Buddy",
+        charmIconURL: "https://media.valorant-api.com/buddylevels/49e6eea8-4ee4-2859-02a8-3a9dca3a1c96/displayicon.png"
       },
       {
         id: "mock-phantom",
@@ -841,6 +845,11 @@ const playerCardAssetCache = {
   loadedAt: 0,
   cardsByID: new Map()
 };
+const buddyAssetCache = {
+  loadedAt: 0,
+  buddiesByID: new Map(),
+  buddyLevelsByID: new Map()
+};
 
 async function fetchSkinLevel(itemID) {
   if (skinLevelCache.has(itemID)) {
@@ -937,6 +946,36 @@ async function fetchPlayerCardAssets() {
   playerCardAssetCache.loadedAt = Date.now();
   playerCardAssetCache.cardsByID = new Map((body.data || []).map((card) => [card.uuid, card]));
   return playerCardAssetCache;
+}
+
+async function fetchBuddyAssets() {
+  if (Date.now() - buddyAssetCache.loadedAt < 3600000 && buddyAssetCache.buddiesByID.size > 0) {
+    return buddyAssetCache;
+  }
+
+  const body = await fetchValorantAPIJSON("https://valorant-api.com/v1/buddies", "buddies");
+  if (!body) {
+    return buddyAssetCache;
+  }
+
+  const buddiesByID = new Map();
+  const buddyLevelsByID = new Map();
+
+  for (const buddy of body.data || []) {
+    buddiesByID.set(buddy.uuid, buddy);
+
+    for (const level of buddy.levels || []) {
+      buddyLevelsByID.set(level.uuid, {
+        ...level,
+        buddy
+      });
+    }
+  }
+
+  buddyAssetCache.loadedAt = Date.now();
+  buddyAssetCache.buddiesByID = buddiesByID;
+  buddyAssetCache.buddyLevelsByID = buddyLevelsByID;
+  return buddyAssetCache;
 }
 
 async function fetchSkinChroma(chromaID) {
@@ -1287,13 +1326,14 @@ async function fetchPlayerLoadout(puuid, shard) {
 
   requireMatchingPUUID(puuid);
 
-  const [loadout, weaponAssets, contentTiers] = await Promise.all([
+  const [loadout, weaponAssets, contentTiers, buddyAssets] = await Promise.all([
     fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
       errorMessage: "Riot player loadout request failed.",
       errorCode: "riot_player_loadout_failed"
     }),
     fetchWeaponAssets(),
-    fetchContentTierAssets()
+    fetchContentTierAssets(),
+    fetchBuddyAssets()
   ]);
 
   const guns = await Promise.all((loadout.Guns || []).map(async (gun) => {
@@ -1304,6 +1344,11 @@ async function fetchPlayerLoadout(puuid, shard) {
     const skinName = skin?.displayName || skinLevel?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
     const contentTierUUID = skin?.contentTierUuid || skinLevel?.skinContentTierUuid || skinLevel?.contentTierUuid || null;
     const contentTier = contentTierUUID ? contentTiers.get(contentTierUUID) : null;
+    const charmID = gun.CharmID || null;
+    const charmLevelID = gun.CharmLevelID || null;
+    const charmLevel = (charmLevelID ? buddyAssets.buddyLevelsByID.get(charmLevelID) : null)
+      || (charmID ? buddyAssets.buddyLevelsByID.get(charmID) : null);
+    const charm = (charmID ? buddyAssets.buddiesByID.get(charmID) : null) || charmLevel?.buddy || null;
 
     return {
       id: gun.ID,
@@ -1321,7 +1366,10 @@ async function fetchPlayerLoadout(puuid, shard) {
       skinID: gun.SkinID,
       skinLevelID: gun.SkinLevelID,
       chromaID: gun.ChromaID,
-      charmID: gun.CharmID || null,
+      charmID,
+      charmLevelID,
+      charmName: charm?.displayName || charmLevel?.displayName || null,
+      charmIconURL: firstURL(charmLevel?.displayIcon, charm?.displayIcon),
       contentTierUUID,
       contentTierName: contentTier?.name || null,
       contentTierColor: contentTier?.color || null,
