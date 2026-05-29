@@ -1287,12 +1287,13 @@ async function fetchPlayerLoadout(puuid, shard) {
 
   requireMatchingPUUID(puuid);
 
-  const [loadout, weaponAssets] = await Promise.all([
+  const [loadout, weaponAssets, contentTiers] = await Promise.all([
     fetchRiotJSON(`https://pd.${shard}.a.pvp.net/personalization/v2/players/${encodeURIComponent(puuid)}/playerloadout`, {
       errorMessage: "Riot player loadout request failed.",
       errorCode: "riot_player_loadout_failed"
     }),
-    fetchWeaponAssets()
+    fetchWeaponAssets(),
+    fetchContentTierAssets()
   ]);
 
   const guns = await Promise.all((loadout.Guns || []).map(async (gun) => {
@@ -1301,6 +1302,8 @@ async function fetchPlayerLoadout(puuid, shard) {
     const skinChroma = await fetchSkinChroma(gun.ChromaID);
     const skin = getSkinByID(gun.SkinID);
     const skinName = skin?.displayName || skinLevel?.displayName || weapon.displayName || gun.SkinLevelID || gun.SkinID;
+    const contentTierUUID = skin?.contentTierUuid || skinLevel?.skinContentTierUuid || skinLevel?.contentTierUuid || null;
+    const contentTier = contentTierUUID ? contentTiers.get(contentTierUUID) : null;
 
     return {
       id: gun.ID,
@@ -1318,7 +1321,11 @@ async function fetchPlayerLoadout(puuid, shard) {
       skinID: gun.SkinID,
       skinLevelID: gun.SkinLevelID,
       chromaID: gun.ChromaID,
-      charmID: gun.CharmID || null
+      charmID: gun.CharmID || null,
+      contentTierUUID,
+      contentTierName: contentTier?.name || null,
+      contentTierColor: contentTier?.color || null,
+      contentTierIconURL: contentTier?.iconURL || null
     };
   }));
 

@@ -90,58 +90,94 @@ struct CollectionsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Collections")
-                        .font(.largeTitle.bold())
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14, pinnedViews: [.sectionHeaders]) {
+                        Text("Collections")
+                            .font(.largeTitle.bold())
+                            .id("collections-title")
 
-                    DisclosureGroup(isExpanded: $isShowingSkins) {
-                        if let loadout = bridge.loadout, !loadout.guns.isEmpty {
-                            LoadoutOverview(loadout: loadout) { gun in
-                                selectedGun = gun
+                        Section {
+                            if isShowingSkins {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    if let loadout = bridge.loadout, !loadout.guns.isEmpty {
+                                        LoadoutOverview(loadout: loadout) { gun in
+                                            selectedGun = gun
+                                        }
+                                    } else {
+                                        CollectionEmptyState(title: "No skins loaded", systemImage: "scope")
+                                    }
+                                }
+                                .collectionSectionContentStyle()
                             }
-                            .padding(.top, 12)
-                        } else {
-                            CollectionEmptyState(title: "No skins loaded", systemImage: "scope")
-                                .padding(.top, 12)
+                        } header: {
+                            CollectionStickyHeader(title: "Skins", systemImage: "scope", isExpanded: isShowingSkins) {
+                                toggleCollectionSection(id: "skins-header", isExpanded: $isShowingSkins, proxy: proxy)
+                            }
+                            .id("skins-header")
                         }
-                    } label: {
-                        CollectionSectionLabel(title: "Skins", systemImage: "scope")
-                    }
-                    .collectionDisclosureStyle()
 
-                    DisclosureGroup(isExpanded: $isShowingSprays) {
-                        CollectionAssetGrid(items: bridge.collections?.sprays ?? [], emptyTitle: "No sprays loaded")
-                            .padding(.top, 12)
-                    } label: {
-                        CollectionSectionLabel(title: "Sprays", systemImage: "paintpalette")
-                    }
-                    .collectionDisclosureStyle()
+                        Section {
+                            if isShowingSprays {
+                                CollectionAssetGrid(items: bridge.collections?.sprays ?? [], emptyTitle: "No sprays loaded")
+                                    .collectionSectionContentStyle()
+                            }
+                        } header: {
+                            CollectionStickyHeader(title: "Sprays", systemImage: "paintpalette", isExpanded: isShowingSprays) {
+                                toggleCollectionSection(id: "sprays-header", isExpanded: $isShowingSprays, proxy: proxy)
+                            }
+                            .id("sprays-header")
+                        }
 
-                    DisclosureGroup(isExpanded: $isShowingCards) {
-                        CollectionAssetGrid(items: bridge.collections?.playerCards ?? [], emptyTitle: "No player cards loaded")
-                            .padding(.top, 12)
-                    } label: {
-                        CollectionSectionLabel(title: "Player Cards", systemImage: "rectangle.portrait")
-                    }
-                    .collectionDisclosureStyle()
+                        Section {
+                            if isShowingCards {
+                                CollectionAssetGrid(items: bridge.collections?.playerCards ?? [], emptyTitle: "No player cards loaded")
+                                    .collectionSectionContentStyle()
+                            }
+                        } header: {
+                            CollectionStickyHeader(title: "Player Cards", systemImage: "rectangle.portrait", isExpanded: isShowingCards) {
+                                toggleCollectionSection(id: "cards-header", isExpanded: $isShowingCards, proxy: proxy)
+                            }
+                            .id("cards-header")
+                        }
 
-                    if let loadoutErrorMessage = bridge.loadoutErrorMessage {
-                        Text(loadoutErrorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
+                        if let loadoutErrorMessage = bridge.loadoutErrorMessage {
+                            Text(loadoutErrorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
 
-                    if let collectionsErrorMessage = bridge.collectionsErrorMessage {
-                        Text(collectionsErrorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
+                        if let collectionsErrorMessage = bridge.collectionsErrorMessage {
+                            Text(collectionsErrorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
                     }
+                    .padding()
                 }
-                .padding()
             }
             .sheet(item: $selectedGun) { gun in
                 LoadoutSkinPickerView(bridge: bridge, gun: gun)
+            }
+        }
+    }
+
+    private func toggleCollectionSection(id: String, isExpanded: Binding<Bool>, proxy: ScrollViewProxy) {
+        let wasExpanded = isExpanded.wrappedValue
+
+        if wasExpanded {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                proxy.scrollTo(id, anchor: .top)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                    isExpanded.wrappedValue = false
+                }
+            }
+        } else {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                isExpanded.wrappedValue = true
             }
         }
     }
@@ -1292,6 +1328,37 @@ struct CollectionSectionLabel: View {
     }
 }
 
+struct CollectionStickyHeader: View {
+    let title: String
+    let systemImage: String
+    let isExpanded: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Label(title, systemImage: systemImage)
+                    .font(.headline)
+
+                Spacer()
+
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding()
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.secondary.opacity(0.14), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct CollectionAssetGrid: View {
     let items: [BridgeCollectionItem]
     let emptyTitle: String
@@ -1328,6 +1395,7 @@ struct CollectionAssetGrid: View {
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity)
+                    .frame(height: 132)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
             }
@@ -1350,6 +1418,11 @@ struct CollectionEmptyState: View {
 
 extension View {
     func collectionDisclosureStyle() -> some View {
+        padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    func collectionSectionContentStyle() -> some View {
         padding()
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
@@ -1651,9 +1724,18 @@ enum LoadoutWeaponCardStyle {
     var imageHeight: CGFloat {
         switch self {
         case .square:
-            return 96
+            return 86
         case .rectangle:
-            return 126
+            return 104
+        }
+    }
+
+    var cardHeight: CGFloat {
+        switch self {
+        case .square:
+            return 190
+        case .rectangle:
+            return 184
         }
     }
 }
@@ -1689,14 +1771,38 @@ struct LoadoutWeaponCard: View {
                     .lineLimit(1)
 
                 Text(gun.displaySkinName)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.78)
             }
+            .frame(height: 68, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .frame(height: style.cardHeight, alignment: .topLeading)
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(alignment: .topTrailing) {
+            if let tierIconURL = gun.contentTierIconURL {
+                AsyncImage(url: tierIconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    default:
+                        Image(systemName: "diamond.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(gun.contentTierColorValue ?? .secondary)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .padding(8)
+            }
+        }
+    }
+
+    private var cardBackground: some ShapeStyle {
+        (gun.contentTierColorValue ?? .secondary).opacity(0.18)
     }
 }
 
@@ -2512,9 +2618,21 @@ struct BridgeLoadoutGun: Codable, Identifiable {
     let skinLevelID: String
     let chromaID: String
     let charmID: String?
+    let contentTierUUID: String?
+    let contentTierName: String?
+    let contentTierColor: String?
+    let contentTierIconURL: URL?
 
     var categoryKey: String {
         category.lowercased()
+    }
+
+    var contentTierColorValue: Color? {
+        guard let contentTierColor else {
+            return nil
+        }
+
+        return Color(hex: contentTierColor)
     }
 
     var sortName: String {
@@ -3005,7 +3123,7 @@ extension Color {
             red = Double((value & 0xFF000000) >> 24) / 255
             green = Double((value & 0x00FF0000) >> 16) / 255
             blue = Double((value & 0x0000FF00) >> 8) / 255
-            alpha = Double(value & 0x000000FF) / 255
+            alpha = 1
         default:
             return nil
         }
